@@ -54,13 +54,179 @@ class DiagnosticQuestionSetResponse(BaseModel):
                         "main_topic_id": "5878262490202112",
                         "sub_topic_id": "6140467079020544",
                         "difficulty": 0.5,
-                        "discrimination": 1.0
+                        "discrimination": 1.0,
                     }
                 ],
                 "total_questions": 20,
-                "message": "Successfully generated diagnostic question set"
+                "message": "Successfully generated diagnostic question set",
             }
         }
+
+
+# =============== Diagnostic adaptive session (current + preview next) ===============
+
+
+class DiagnosticPreviewQuestion(BaseModel):
+    """
+    Thông tin câu hỏi dùng cho luồng preview (ID + topic).
+    Lưu ý: topic_id ở đây thường map với main_topic_id trong dữ liệu nội bộ.
+    """
+
+    question_id: str
+    topic_id: str
+
+
+class DiagnosticPreviewBranches(BaseModel):
+    """Nhánh câu hỏi tiếp theo nếu đúng / sai."""
+
+    if_correct: DiagnosticPreviewQuestion
+    if_incorrect: DiagnosticPreviewQuestion
+
+
+class DiagnosticPreviewResponse(BaseModel):
+    """
+    Response chung cho:
+    - API init Diagnostic
+    - API get next preview question
+
+    Cấu trúc giống ví dụ trong yêu cầu:
+    {
+      "current_question": {...},
+      "preview_next_question": {
+        "if_correct": {...},
+        "if_incorrect": {...}
+      }
+    }
+    """
+
+    current_question: DiagnosticPreviewQuestion
+    preview_next_question: DiagnosticPreviewBranches
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "current_question": {
+                    "question_id": "6448245131706368",
+                    "topic_id": "5878262490202112",
+                },
+                "preview_next_question": {
+                    "if_correct": {
+                        "question_id": "5008459000971264",
+                        "topic_id": "5878262490202112",
+                    },
+                    "if_incorrect": {
+                        "question_id": "5430671466037248",
+                        "topic_id": "5878262490202112",
+                    },
+                },
+            }
+        }
+
+
+class DiagnosticUserAnswer(BaseModel):
+    """Một câu trả lời trong phiên Diagnostic."""
+
+    question_id: str
+    is_correct: bool
+
+
+class DiagnosticSessionProgress(BaseModel):
+    """
+    Trạng thái progress của bài Diagnostic do client gửi lên.
+    Backend không lưu session, client giữ list các câu đã làm.
+    """
+
+    user_id: str
+    answers: List[DiagnosticUserAnswer] = Field(
+        default_factory=list,
+        description="Danh sách các câu đã làm trong phiên Diagnostic hiện tại",
+    )
+
+
+class DiagnosticInitRequest(BaseModel):
+    """
+    Request cho API init Diagnostic.
+
+    - user_id: định danh user
+    - coverage_topics: (optional) danh sách topic/subtopic mà bài Diagnostic cần cover.
+    """
+
+    user_id: str
+    coverage_topics: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Danh sách topic cần bao phủ (nếu bỏ trống sẽ dùng toàn bộ topic có trong dữ liệu)"
+        ),
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_id": "user_123",
+                "coverage_topics": ["5878262490202112", "5533861310103552"],
+            }
+        }
+
+
+class DiagnosticNextQuestionRequest(BaseModel):
+    """
+    Request cho API lấy câu tiếp theo + preview (sau khi user đã làm một số câu).
+
+    Truyền toàn bộ progress của phiên Diagnostic hiện tại.
+    """
+
+    session: DiagnosticSessionProgress
+    coverage_topics: Optional[List[str]] = Field(
+        default=None,
+        description="Danh sách topic cần bao phủ (cùng format với init)",
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "session": {
+                    "user_id": "user_123",
+                    "answers": [
+                        {
+                            "question_id": "6448245131706368",
+                            "is_correct": True,
+                        }
+                    ],
+                },
+                "coverage_topics": ["5878262490202112"],
+            }
+        }
+
+
+class DiagnosticSubmitAnswerRequest(BaseModel):
+    """
+    API submit một câu trả lời.
+    Backend hiện tại không lưu DB, nên API này chủ yếu để logging / future extension.
+    """
+
+    session: DiagnosticSessionProgress
+    latest_answer: DiagnosticUserAnswer
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "session": {
+                    "user_id": "user_123",
+                    "answers": [],
+                },
+                "latest_answer": {
+                    "question_id": "6448245131706368",
+                    "is_correct": True,
+                },
+            }
+        }
+
+
+class DiagnosticSubmitAnswerResponse(BaseModel):
+    """Response đơn giản xác nhận submit thành công."""
+
+    success: bool
+    message: str
 
 class DifficultyStatistics(BaseModel):
     """Thống kê về độ khó"""
@@ -125,32 +291,33 @@ class AllQuestionsResponse(BaseModel):
                         "max": 2.8,
                         "mean": 0.1,
                         "median": 0.0,
-                        "std": 1.2
+                        "std": 1.2,
                     },
                     "discrimination": {
                         "min": 1.0,
                         "max": 1.0,
                         "mean": 1.0,
-                        "median": 1.0
-                    }
+                        "median": 1.0,
+                    },
                 },
                 "distributions": {
                     "difficulty": {
                         "easy": 300,
                         "medium": 900,
-                        "hard": 300
+                        "hard": 300,
                     },
                     "topics": {
                         "by_main_topic": {},
                         "by_sub_topic": {},
                         "total_main_topics": 10,
                         "total_sub_topics": 50,
-                        "top_5_main_topics": []
-                    }
+                        "top_5_main_topics": [],
+                    },
                 },
-                "limit_applied": False
+                "limit_applied": False,
             }
         }
+
 
 class EstimateAbilityRequest(BaseModel):
     """Request để tính ability của một user"""
@@ -159,9 +326,10 @@ class EstimateAbilityRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "user_id": "4515379877511168"
+                "user_id": "4515379877511168",
             }
         }
+
 
 class TopicAbility(BaseModel):
     """Năng lực theo từng topic"""
@@ -192,7 +360,7 @@ class UserAbilityResponse(BaseModel):
                         "topic_id": "5878262490202112",
                         "ability": 0.6,
                         "confidence": 0.8,
-                        "num_responses": 5
+                        "num_responses": 5,
                     }
                 ],
                 "sub_topic_abilities": [
@@ -200,12 +368,53 @@ class UserAbilityResponse(BaseModel):
                         "topic_id": "6140467079020544",
                         "ability": 0.7,
                         "confidence": 0.75,
-                        "num_responses": 3
+                        "num_responses": 3,
                     }
                 ],
-                "message": "Ability estimated successfully"
+                "message": "Ability estimated successfully",
             }
         }
+
+
+class DiagnosticResultResponse(BaseModel):
+    """
+    Kết quả tổng hợp cho một bài Diagnostic.
+    """
+
+    user_id: str
+    overall_ability: float = Field(..., description="Năng lực tổng thể (Standard Normal)")
+    confidence: float = Field(..., description="Độ tin cậy của ước tính (0-1)")
+    main_topic_abilities: List[TopicAbility] = Field(
+        default_factory=list,
+        description="Năng lực theo main topic trong bài Diagnostic",
+    )
+    sub_topic_abilities: List[TopicAbility] = Field(
+        default_factory=list,
+        description="Năng lực theo sub topic trong bài Diagnostic",
+    )
+    covered_subtopics: List[str] = Field(
+        default_factory=list,
+        description="Danh sách subtopic đã được hỏi trong bài Diagnostic",
+    )
+    completed_all_subtopics: bool = Field(
+        ..., description="True nếu tất cả subtopic yêu cầu đã được hỏi"
+    )
+    message: str
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_id": "user_123",
+                "overall_ability": 0.4,
+                "confidence": 0.8,
+                "main_topic_abilities": [],
+                "sub_topic_abilities": [],
+                "covered_subtopics": ["6140467079020544"],
+                "completed_all_subtopics": True,
+                "message": "Diagnostic result calculated successfully",
+            }
+        }
+
 
 class EstimateAbilitiesBatchRequest(BaseModel):
     """Request để tính ability của nhiều user"""
@@ -214,9 +423,14 @@ class EstimateAbilitiesBatchRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "user_ids": ["4515379877511168", "5515379877511169", "6515379877511170"]
+                "user_ids": [
+                    "4515379877511168",
+                    "5515379877511169",
+                    "6515379877511170",
+                ]
             }
         }
+
 
 class BatchUserAbilityResponse(BaseModel):
     """Response cho một user trong batch"""
@@ -244,14 +458,15 @@ class EstimateAbilitiesBatchResponse(BaseModel):
                         "overall_ability": 0.5,
                         "confidence": 0.85,
                         "num_responses": 20,
-                        "error": None
+                        "error": None,
                     }
                 ],
                 "total_users": 3,
                 "successful_count": 2,
-                "failed_count": 1
+                "failed_count": 1,
             }
         }
+
 
 class ExamQuestion(BaseModel):
     """Một câu hỏi trong đề thi thật"""
@@ -264,9 +479,10 @@ class ExamQuestion(BaseModel):
             "example": {
                 "question_id": "4515379877511168",
                 "difficulty": 0.5,
-                "discrimination": 1.0
+                "discrimination": 1.0,
             }
         }
+
 
 class ExamStructure(BaseModel):
     """Cấu trúc đề thi thật"""
@@ -281,13 +497,14 @@ class ExamStructure(BaseModel):
                     {
                         "question_id": "4515379877511168",
                         "difficulty": 0.5,
-                        "discrimination": 1.0
+                        "discrimination": 1.0,
                     }
                 ],
                 "passing_threshold": 0.7,
-                "total_score": 100
+                "total_score": 100,
             }
         }
+
 
 class PassingProbabilityRequest(BaseModel):
     """Request để tính passing probability"""
@@ -303,13 +520,14 @@ class PassingProbabilityRequest(BaseModel):
                         {
                             "question_id": "4515379877511168",
                             "difficulty": 0.5,
-                            "discrimination": 1.0
+                            "discrimination": 1.0,
                         }
                     ],
-                    "passing_threshold": 0.7
-                }
+                    "passing_threshold": 0.7,
+                },
             }
         }
+
 
 class PassingProbabilityResponse(BaseModel):
     """Response cho passing probability"""
@@ -331,9 +549,9 @@ class PassingProbabilityResponse(BaseModel):
                 "passing_threshold": 70.0,
                 "exam_info": {
                     "total_questions": 50,
-                    "average_difficulty": 0.3
+                    "average_difficulty": 0.3,
                 },
-                "message": "Passing probability calculated successfully"
+                "message": "Passing probability calculated successfully",
             }
         }
 

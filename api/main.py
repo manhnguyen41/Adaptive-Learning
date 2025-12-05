@@ -5,6 +5,7 @@ Main API application
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.diagnostic_api import router as diagnostic_router
+from api.diagnostic_session_api import router as diagnostic_session_router
 
 app = FastAPI(
     title="Adaptive Learning Diagnostic Test API",
@@ -22,6 +23,7 @@ app.add_middleware(
 )
 
 app.include_router(diagnostic_router)
+app.include_router(diagnostic_session_router)
 
 @app.get("/")
 async def root():

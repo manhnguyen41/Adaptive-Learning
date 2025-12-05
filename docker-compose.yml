@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: adaptive-learning-api
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount data files nếu muốn update mà không rebuild image
+      - ./user_question_progress_100000.json:/app/user_question_progress_100000.json:ro
+      - ./topic_questions_asvab.csv:/app/topic_questions_asvab.csv:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+

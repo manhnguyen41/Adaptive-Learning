@@ -26,7 +26,7 @@ from api.schemas import (
     EstimateAbilitiesBatchResponse,
     BatchUserAbilityResponse,
     PassingProbabilityRequest,
-    PassingProbabilityResponse
+    PassingProbabilityResponse,
 )
 from services.question_selector_service import QuestionSelectorService
 from services.data_loader_service import DataLoaderService
@@ -36,6 +36,7 @@ from services.ability_estimator_service import AbilityEstimatorService
 from services.passing_probability_service import PassingProbabilityService
 from models.irt_model import IRTModel
 from models.question import Question
+from models.user_response import UserResponse
 
 router = APIRouter(prefix="/api/diagnostic", tags=["Diagnostic Test"])
 
@@ -121,6 +122,7 @@ def get_question_topic_map() -> Dict[str, Dict[str, str]]:
     
     return question_topic_map
 
+
 @router.post("/generate-initial-question-set", 
              response_model=DiagnosticQuestionSetResponse,
              summary="Sinh ra bộ câu hỏi đánh giá năng lực ban đầu")
@@ -177,6 +179,7 @@ async def generate_initial_question_set(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi khi sinh câu hỏi: {str(e)}")
+
 
 @router.get("/questions", 
             response_model=AllQuestionsResponse,
@@ -253,6 +256,7 @@ async def get_all_questions(limit: Optional[int] = None):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi: {str(e)}")
+
 
 @router.post("/estimate-ability",
              response_model=UserAbilityResponse,
@@ -354,6 +358,7 @@ async def estimate_ability(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi khi tính ability: {str(e)}")
+
 
 @router.post("/estimate-abilities-batch",
              response_model=EstimateAbilitiesBatchResponse,

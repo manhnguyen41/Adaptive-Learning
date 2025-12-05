@@ -71,10 +71,7 @@ class QuestionSelectorService:
                 question.discrimination
             )
             
-            distance = abs(difficulty - user_ability.overall_ability)
-            distance_score = 1.0 / (1.0 + distance)
-            
-            score = information * 0.7 + distance_score * 0.3
+            score = information
             
             if score > best_score:
                 best_score = score
