@@ -31,6 +31,7 @@ router = APIRouter(prefix="/api/diagnostic", tags=["Diagnostic Session"])
 
 _questions_cache = None
 _difficulties_cache = None
+_topic_meta_cache = None
 
 def get_question_selector() -> QuestionSelectorService:
     """Dependency để tạo QuestionSelectorService"""
@@ -75,6 +76,50 @@ def load_questions_and_difficulties():
     _difficulties_cache = difficulties
     
     return questions, difficulties
+
+
+def get_topic_meta_map() -> Dict[str, Dict[str, str]]:
+    """Tạo mapping topic_id -> {name, type} từ file topic"""
+    global _topic_meta_cache
+    if _topic_meta_cache is not None:
+        return _topic_meta_cache
+
+    topic_file = "topic_questions_asvab.csv"
+    meta_map: Dict[str, Dict[str, str]] = {}
+
+    if os.path.exists(topic_file):
+        with open(topic_file, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            first_field = reader.fieldnames[0]
+
+            if '|' in first_field:
+                columns = first_field.split('|')
+                for row in reader:
+                    values = row[first_field].split('|')
+                    if len(values) != len(columns):
+                        continue
+                    row = dict(zip(columns, values))
+                    main_id = row.get("main_topic_id", "")
+                    main_name = row.get("main_topic_name", "")
+                    sub_id = row.get("sub_topic_id", "")
+                    sub_name = row.get("sub_topic_name", "")
+                    if main_id:
+                        meta_map[str(main_id)] = {"name": main_name, "type": "main"}
+                    if sub_id:
+                        meta_map[str(sub_id)] = {"name": sub_name, "type": "sub"}
+            else:
+                for row in reader:
+                    main_id = row.get("main_topic_id", "")
+                    main_name = row.get("main_topic_name", "")
+                    sub_id = row.get("sub_topic_id", "")
+                    sub_name = row.get("sub_topic_name", "")
+                    if main_id:
+                        meta_map[str(main_id)] = {"name": main_name, "type": "main"}
+                    if sub_id:
+                        meta_map[str(sub_id)] = {"name": sub_name, "type": "sub"}
+
+    _topic_meta_cache = meta_map
+    return meta_map
 
 def get_ability_estimator() -> AbilityEstimatorService:
     """Dependency để tạo AbilityEstimatorService"""
@@ -123,6 +168,7 @@ def _build_preview_response_for_session(
     
     Nếu topic_question_counts được cung cấp, sẽ lọc các topic đã đủ số câu hỏi.
     """
+    topic_meta_map = get_topic_meta_map()
     candidate_questions = _filter_questions_by_topics(questions, coverage_topics)
     
     if topic_question_counts:
@@ -207,21 +253,30 @@ def _build_preview_response_for_session(
         question_difficulties=difficulties,
     )
 
+    def _resolve_topic_info(q: Question) -> Dict[str, str]:
+        topic_id = str(q.main_topic_id or q.sub_topic_id)
+        topic_info = topic_meta_map.get(topic_id, {})
+        topic_name = topic_info.get("name")
+        return {"topic_id": topic_id, "topic_name": topic_name}
+
+    current_topic_info = _resolve_topic_info(current_question)
+    correct_topic_info = _resolve_topic_info(next_if_correct)
+    incorrect_topic_info = _resolve_topic_info(next_if_incorrect)
+
     current_preview = DiagnosticPreviewQuestion(
         question_id=current_question.question_id,
-        topic_id=str(current_question.main_topic_id or current_question.sub_topic_id),
+        topic_id=current_topic_info["topic_id"],
+        topic_name=current_topic_info["topic_name"],
     )
     if_correct_preview = DiagnosticPreviewQuestion(
         question_id=next_if_correct.question_id,
-        topic_id=str(
-            next_if_correct.main_topic_id or next_if_correct.sub_topic_id
-        ),
+        topic_id=correct_topic_info["topic_id"],
+        topic_name=correct_topic_info["topic_name"],
     )
     if_incorrect_preview = DiagnosticPreviewQuestion(
         question_id=next_if_incorrect.question_id,
-        topic_id=str(
-            next_if_incorrect.main_topic_id or next_if_incorrect.sub_topic_id
-        ),
+        topic_id=incorrect_topic_info["topic_id"],
+        topic_name=incorrect_topic_info["topic_name"],
     )
 
     return DiagnosticPreviewResponse(

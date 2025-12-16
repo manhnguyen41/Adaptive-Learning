@@ -74,6 +74,9 @@ class DiagnosticPreviewQuestion(BaseModel):
 
     question_id: str
     topic_id: str
+    topic_name: Optional[str] = Field(
+        default=None, description="Tên topic tương ứng (nếu có sẵn)"
+    )
 
 
 class DiagnosticPreviewBranches(BaseModel):
