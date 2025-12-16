@@ -3,7 +3,7 @@ API Schemas - Request/Response models
 """
 
 from typing import List, Optional, Dict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 class QuestionResponse(BaseModel):
     """Schema cho câu hỏi trong response"""
@@ -149,6 +149,7 @@ class DiagnosticInitRequest(BaseModel):
 
     - user_id: định danh user
     - coverage_topics: (optional) danh sách topic/subtopic mà bài Diagnostic cần cover.
+    - topic_question_counts: (optional) số lượng câu hỏi cần cho từng topic_id.
     """
 
     user_id: str
@@ -158,12 +159,20 @@ class DiagnosticInitRequest(BaseModel):
             "Danh sách topic cần bao phủ (nếu bỏ trống sẽ dùng toàn bộ topic có trong dữ liệu)"
         ),
     )
+    topic_question_counts: Optional[Dict[str, int]] = Field(
+        default=None,
+        description="Số lượng câu hỏi cần cho từng topic_id. Nếu topic đã đủ số câu thì không gen thêm.",
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
                 "user_id": "user_123",
                 "coverage_topics": ["5878262490202112", "5533861310103552"],
+                "topic_question_counts": {
+                    "5878262490202112": 5,
+                    "5533861310103552": 10
+                },
             }
         }
 
@@ -180,6 +189,10 @@ class DiagnosticNextQuestionRequest(BaseModel):
         default=None,
         description="Danh sách topic cần bao phủ (cùng format với init)",
     )
+    topic_question_counts: Optional[Dict[str, int]] = Field(
+        default=None,
+        description="Số lượng câu hỏi cần cho từng topic_id. Nếu topic đã đủ số câu thì không gen thêm.",
+    )
 
     class Config:
         json_schema_extra = {
@@ -194,6 +207,10 @@ class DiagnosticNextQuestionRequest(BaseModel):
                     ],
                 },
                 "coverage_topics": ["5878262490202112"],
+                "topic_question_counts": {
+                    "5878262490202112": 5,
+                    "5533861310103552": 10
+                },
             }
         }
 
@@ -484,20 +501,74 @@ class ExamQuestion(BaseModel):
         }
 
 
-class ExamStructure(BaseModel):
-    """Cấu trúc đề thi thật"""
-    questions: List[ExamQuestion] = Field(..., description="Danh sách câu hỏi trong đề thi", min_items=1)
-    passing_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="Ngưỡng đậu (tỷ lệ câu đúng cần thiết, ví dụ: 0.7 = 70%)")
-    total_score: Optional[int] = Field(None, description="Tổng điểm của đề thi. Nếu None, sẽ dùng số lượng câu hỏi")
+class ExamTopicDifficultyCounts(BaseModel):
+    """Số lượng câu hỏi theo mức độ khó cho một topic"""
+    easy: int = Field(default=0, ge=0, description="Số câu hỏi dễ (difficulty ∈ [-3, -1))")
+    medium: int = Field(default=0, ge=0, description="Số câu hỏi trung bình (difficulty ∈ [-1, 1])")
+    hard: int = Field(default=0, ge=0, description="Số câu hỏi khó (difficulty ∈ (1, 3])")
+
+
+class ExamTopicStructure(BaseModel):
+    """Cấu trúc đề thi theo topic và mức độ khó"""
+    topic_id: str = Field(..., description="ID của topic (main_topic_id hoặc sub_topic_id)")
+    topic_type: Optional[str] = Field(default="sub", description="Loại topic: 'main' hoặc 'sub' (mặc định: 'sub')")
+    difficulty_counts: ExamTopicDifficultyCounts = Field(..., description="Số lượng câu hỏi theo mức độ khó")
     
     class Config:
         json_schema_extra = {
             "example": {
-                "questions": [
+                "topic_id": "5878262490202112",
+                "topic_type": "main",
+                "difficulty_counts": {
+                    "easy": 5,
+                    "medium": 10,
+                    "hard": 5
+                }
+            }
+        }
+
+
+class ExamStructure(BaseModel):
+    """Cấu trúc đề thi thật
+    
+    Hỗ trợ 2 cách:
+    1. questions: Danh sách câu hỏi cụ thể (question_id)
+    2. topics: Cấu trúc theo topic và số câu theo mức độ khó (sẽ tự động chọn câu hỏi)
+    
+    Phải có một trong hai: questions hoặc topics.
+    """
+    questions: Optional[List[ExamQuestion]] = Field(
+        default=None,
+        description="Danh sách câu hỏi cụ thể trong đề thi. Nếu None, phải có topics."
+    )
+    topics: Optional[List[ExamTopicStructure]] = Field(
+        default=None,
+        description="Cấu trúc đề thi theo topic và số câu theo mức độ khó. Nếu None, phải có questions."
+    )
+    passing_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="Ngưỡng đậu (tỷ lệ câu đúng cần thiết, ví dụ: 0.7 = 70%)")
+    total_score: Optional[int] = Field(None, description="Tổng điểm của đề thi. Nếu None, sẽ dùng số lượng câu hỏi")
+    
+    @model_validator(mode='after')
+    def validate_questions_or_topics(self):
+        """Validate: phải có questions hoặc topics"""
+        if not self.questions and not self.topics:
+            raise ValueError("Phải có 'questions' hoặc 'topics'")
+        if self.questions and self.topics:
+            raise ValueError("Chỉ được có một trong hai: 'questions' hoặc 'topics'")
+        return self
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "topics": [
                     {
-                        "question_id": "4515379877511168",
-                        "difficulty": 0.5,
-                        "discrimination": 1.0,
+                        "topic_id": "5878262490202112",
+                        "topic_type": "main",
+                        "difficulty_counts": {
+                            "easy": 5,
+                            "medium": 10,
+                            "hard": 5
+                        }
                     }
                 ],
                 "passing_threshold": 0.7,
@@ -510,21 +581,36 @@ class PassingProbabilityRequest(BaseModel):
     """Request để tính passing probability"""
     user_id: str = Field(..., description="ID của user cần tính xác suất đậu")
     exam_structure: ExamStructure = Field(..., description="Cấu trúc đề thi thật")
+    user_responses: Optional[List[DiagnosticUserAnswer]] = Field(
+        default=None,
+        description=(
+            "Lịch sử trả lời câu hỏi của user trong bài diagnostic (nếu truyền sẽ dùng thay vì load từ file). "
+            "Format giống DiagnosticUserAnswer."
+        ),
+    )
     
     class Config:
         json_schema_extra = {
             "example": {
                 "user_id": "4515379877511168",
                 "exam_structure": {
-                    "questions": [
+                    "topics": [
                         {
-                            "question_id": "4515379877511168",
-                            "difficulty": 0.5,
-                            "discrimination": 1.0,
+                            "topic_id": "5878262490202112",
+                            "topic_type": "main",
+                            "difficulty_counts": {
+                                "easy": 5,
+                                "medium": 10,
+                                "hard": 5
+                            }
                         }
                     ],
                     "passing_threshold": 0.7,
                 },
+                "user_responses": [
+                    {"question_id": "4515379877511168", "is_correct": True},
+                    {"question_id": "5515379877511169", "is_correct": False},
+                ],
             }
         }
 

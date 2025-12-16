@@ -115,12 +115,52 @@ def _build_preview_response_for_session(
     difficulties: Dict[str, float],
     session: DiagnosticSessionProgress,
     coverage_topics: Optional[List[str]] = None,
+    topic_question_counts: Optional[Dict[str, int]] = None,
 ) -> DiagnosticPreviewResponse:
     """
     Core logic: từ session Diagnostic (các câu đã làm) => chọn current_question
     và preview trước 2 nhánh if_correct / if_incorrect cho current_question đó.
+    
+    Nếu topic_question_counts được cung cấp, sẽ lọc các topic đã đủ số câu hỏi.
     """
     candidate_questions = _filter_questions_by_topics(questions, coverage_topics)
+    
+    if topic_question_counts:
+        question_topic_map = get_question_topic_map()
+        
+        topic_answered_counts: Dict[str, int] = {}
+        for ans in session.answers:
+            topic_info = question_topic_map.get(ans.question_id, {})
+            main_topic_id = str(topic_info.get("main_topic_id", ""))
+            sub_topic_id = str(topic_info.get("sub_topic_id", ""))
+            
+            if main_topic_id and main_topic_id in topic_question_counts:
+                topic_answered_counts[main_topic_id] = topic_answered_counts.get(main_topic_id, 0) + 1
+            elif sub_topic_id and sub_topic_id in topic_question_counts:
+                topic_answered_counts[sub_topic_id] = topic_answered_counts.get(sub_topic_id, 0) + 1
+        
+        filtered_candidate_questions = []
+        for q in candidate_questions:
+            main_topic_id = str(q.main_topic_id) if q.main_topic_id else ""
+            sub_topic_id = str(q.sub_topic_id) if q.sub_topic_id else ""
+            
+            # Kiểm tra xem topic này có bị giới hạn số câu không
+            should_include = True
+            if main_topic_id in topic_question_counts:
+                required_count = topic_question_counts[main_topic_id]
+                answered_count = topic_answered_counts.get(main_topic_id, 0)
+                if answered_count >= required_count:
+                    should_include = False
+            elif sub_topic_id in topic_question_counts:
+                required_count = topic_question_counts[sub_topic_id]
+                answered_count = topic_answered_counts.get(sub_topic_id, 0)
+                if answered_count >= required_count:
+                    should_include = False
+            
+            if should_include:
+                filtered_candidate_questions.append(q)
+        
+        candidate_questions = filtered_candidate_questions
 
     user_responses: List[UserResponse] = []
     for ans in session.answers:
@@ -222,6 +262,7 @@ async def init_diagnostic_session(
             difficulties=difficulties,
             session=empty_session,
             coverage_topics=request.coverage_topics,
+            topic_question_counts=request.topic_question_counts,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -265,6 +306,7 @@ async def get_next_preview_question(
             difficulties=difficulties,
             session=request.session,
             coverage_topics=request.coverage_topics,
+            topic_question_counts=request.topic_question_counts,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -310,7 +352,6 @@ async def calculate_diagnostic_result(
     """
     try:
         _, question_difficulties = load_questions_and_difficulties()
-
         user_responses: List[UserResponse] = [
             UserResponse(
                 question_id=ans.question_id,
@@ -321,7 +362,7 @@ async def calculate_diagnostic_result(
             )
             for ans in request.answers
         ]
-
+        
         if not user_responses:
             raise HTTPException(
                 status_code=400,
@@ -341,7 +382,7 @@ async def calculate_diagnostic_result(
             question_topic_map,
             question_difficulties,
             topic_type="main",
-            min_responses=3,
+            min_responses=1,
         )
 
         sub_topic_abilities_dict = estimator.estimate_topic_abilities(
@@ -349,7 +390,7 @@ async def calculate_diagnostic_result(
             question_topic_map,
             question_difficulties,
             topic_type="sub",
-            min_responses=3,
+            min_responses=1,
         )
 
         main_topic_abilities = [
