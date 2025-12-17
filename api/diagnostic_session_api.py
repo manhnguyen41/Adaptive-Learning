@@ -5,9 +5,6 @@ API cho adaptive Diagnostic Test session (init, next question, submit answer, re
 
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Optional, Dict
-import json
-import os
-import csv
 from api.schemas import (
     DiagnosticInitRequest,
     DiagnosticNextQuestionRequest,
@@ -20,126 +17,20 @@ from api.schemas import (
     DiagnosticPreviewBranches,
     TopicAbility,
 )
+from api.shared import (
+    load_questions_and_difficulties,
+    get_question_selector,
+    get_ability_estimator,
+    get_question_topic_map,
+    get_topic_meta_map,
+)
 from services.question_selector_service import QuestionSelectorService
-from services.data_loader_service import DataLoaderService
 from services.ability_estimator_service import AbilityEstimatorService
-from models.irt_model import IRTModel
 from models.question import Question
 from models.user_response import UserResponse
 
 router = APIRouter(prefix="/api/diagnostic", tags=["Diagnostic Session"])
 
-_questions_cache = None
-_difficulties_cache = None
-_topic_meta_cache = None
-
-def get_question_selector() -> QuestionSelectorService:
-    """Dependency để tạo QuestionSelectorService"""
-    irt_model = IRTModel(guessing_param=0.25)
-    return QuestionSelectorService(irt_model)
-
-def load_questions_and_difficulties():
-    """Load câu hỏi và độ khó """
-    global _questions_cache, _difficulties_cache
-    
-    if _questions_cache is not None and _difficulties_cache is not None:
-        return _questions_cache, _difficulties_cache
-    
-    progress_file = "user_question_progress_1000000.json"
-    topic_file = "topic_questions_asvab.csv"
-    
-    if not os.path.exists(progress_file):
-        raise FileNotFoundError(f"File không tồn tại: {progress_file}")
-    
-    with open(progress_file, 'r', encoding='utf-8') as f:
-        progress_data = json.load(f)
-    
-    topic_data = []
-    if os.path.exists(topic_file):
-        with open(topic_file, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            first_field = reader.fieldnames[0]
-            
-            if '|' in first_field:
-                columns = first_field.split('|')
-                for row in reader:
-                    values = row[first_field].split('|')
-                    if len(values) == len(columns):
-                        topic_data.append(dict(zip(columns, values)))
-            else:
-                topic_data = list(reader)
-    
-    valid_question_ids = {str(row.get('question_id', '')) for row in topic_data if row.get('question_id')}
-    
-    questions = DataLoaderService.load_questions_from_data(progress_data, topic_data)
-    difficulties = DataLoaderService.calculate_question_difficulties(progress_data, valid_question_ids)
-    
-    _questions_cache = questions
-    _difficulties_cache = difficulties
-    
-    return questions, difficulties
-
-
-def get_topic_meta_map() -> Dict[str, Dict[str, str]]:
-    """Tạo mapping topic_id -> {name, type} từ file topic"""
-    global _topic_meta_cache
-    if _topic_meta_cache is not None:
-        return _topic_meta_cache
-
-    topic_file = "topic_questions_asvab.csv"
-    meta_map: Dict[str, Dict[str, str]] = {}
-
-    if os.path.exists(topic_file):
-        with open(topic_file, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            first_field = reader.fieldnames[0]
-
-            if '|' in first_field:
-                columns = first_field.split('|')
-                for row in reader:
-                    values = row[first_field].split('|')
-                    if len(values) != len(columns):
-                        continue
-                    row = dict(zip(columns, values))
-                    main_id = row.get("main_topic_id", "")
-                    main_name = row.get("main_topic_name", "")
-                    sub_id = row.get("sub_topic_id", "")
-                    sub_name = row.get("sub_topic_name", "")
-                    if main_id:
-                        meta_map[str(main_id)] = {"name": main_name, "type": "main"}
-                    if sub_id:
-                        meta_map[str(sub_id)] = {"name": sub_name, "type": "sub"}
-            else:
-                for row in reader:
-                    main_id = row.get("main_topic_id", "")
-                    main_name = row.get("main_topic_name", "")
-                    sub_id = row.get("sub_topic_id", "")
-                    sub_name = row.get("sub_topic_name", "")
-                    if main_id:
-                        meta_map[str(main_id)] = {"name": main_name, "type": "main"}
-                    if sub_id:
-                        meta_map[str(sub_id)] = {"name": sub_name, "type": "sub"}
-
-    _topic_meta_cache = meta_map
-    return meta_map
-
-def get_ability_estimator() -> AbilityEstimatorService:
-    """Dependency để tạo AbilityEstimatorService"""
-    irt_model = IRTModel(guessing_param=0.25)
-    return AbilityEstimatorService(irt_model)
-
-def get_question_topic_map() -> Dict[str, Dict[str, str]]:
-    """Tạo mapping question_id -> topic info từ questions cache"""
-    all_questions, _ = load_questions_and_difficulties()
-    
-    question_topic_map = {}
-    for q in all_questions:
-        question_topic_map[q.question_id] = {
-            "main_topic_id": q.main_topic_id,
-            "sub_topic_id": q.sub_topic_id
-        }
-    
-    return question_topic_map
 
 def _filter_questions_by_topics(
     all_questions: List[Question], coverage_topics: Optional[List[str]]
@@ -216,8 +107,8 @@ def _build_preview_response_for_session(
             UserResponse(
                 question_id=ans.question_id,
                 is_correct=ans.is_correct,
-                response_time=30.0, #
-                timestamp=0, #
+                response_time=30.0,
+                timestamp=0,
                 choice_selected=-1,
             )
         )
@@ -399,7 +290,6 @@ async def submit_diagnostic_answer(request: DiagnosticSubmitAnswerRequest):
 )
 async def calculate_diagnostic_result(
     request: DiagnosticSessionProgress,
-    selector: QuestionSelectorService = Depends(get_question_selector),
 ):
     """
     Tính kết quả cho một bài Diagnostic dựa trên progress (các câu đã làm trong bài Diagnostic).
@@ -470,10 +360,9 @@ async def calculate_diagnostic_result(
             for topic_id, (ability_val, conf, num_resp) in sub_topic_abilities_dict.items()
         ]
 
-        question_topic_full_map = get_question_topic_map()
         covered_subtopics_set = set()
         for ans in request.answers:
-            topic_info = question_topic_full_map.get(ans.question_id, {})
+            topic_info = question_topic_map.get(ans.question_id, {})
             sub_topic_id = topic_info.get("sub_topic_id")
             if sub_topic_id:
                 covered_subtopics_set.add(str(sub_topic_id))
@@ -499,4 +388,3 @@ async def calculate_diagnostic_result(
         raise HTTPException(
             status_code=500, detail=f"Lỗi khi tính kết quả Diagnostic: {str(e)}"
         )
-

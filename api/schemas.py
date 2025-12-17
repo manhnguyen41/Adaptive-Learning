@@ -346,7 +346,7 @@ class EstimateAbilityRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "user_id": "4515379877511168",
+                "user_id": "77wmmksb6r@privaterelay.appleid.com",
             }
         }
 
@@ -371,7 +371,7 @@ class UserAbilityResponse(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "user_id": "4515379877511168",
+                "user_id": "77wmmksb6r@privaterelay.appleid.com",
                 "overall_ability": 0.5,
                 "confidence": 0.85,
                 "num_responses": 20,
@@ -444,9 +444,9 @@ class EstimateAbilitiesBatchRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "user_ids": [
-                    "4515379877511168",
-                    "5515379877511169",
-                    "6515379877511170",
+                    "77wmmksb6r@privaterelay.appleid.com",
+                    "2mkx8c7f5j@privaterelay.appleid.com",
+                    "986542fxj6@privaterelay.appleid.com",
                 ]
             }
         }
@@ -474,7 +474,7 @@ class EstimateAbilitiesBatchResponse(BaseModel):
             "example": {
                 "results": [
                     {
-                        "user_id": "4515379877511168",
+                        "user_id": "77wmmksb6r@privaterelay.appleid.com",
                         "overall_ability": 0.5,
                         "confidence": 0.85,
                         "num_responses": 20,
@@ -595,7 +595,7 @@ class PassingProbabilityRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "user_id": "4515379877511168",
+                "user_id": "77wmmksb6r@privaterelay.appleid.com",
                 "exam_structure": {
                     "topics": [
                         {
