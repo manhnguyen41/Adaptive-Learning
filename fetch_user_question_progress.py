@@ -45,7 +45,7 @@ def fetch_all_data(app_id: str, total_limit: int = 100000) -> List[Dict]:
     """
     all_data = []
     offset = 0
-    batch_size = 1000  # Lấy 1000 bản ghi mỗi lần
+    batch_size = 10000  # Lấy 1000 bản ghi mỗi lần
     
     print(f"Bắt đầu lấy dữ liệu (tối đa {total_limit} bản ghi)...")
     
