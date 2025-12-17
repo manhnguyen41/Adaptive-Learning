@@ -5,7 +5,7 @@ Data Loader Service
 import json
 import csv
 import numpy as np
-from typing import Dict, List
+from typing import Dict, List, Optional, Set
 from collections import defaultdict
 from models.question import Question
 from models.user_response import UserResponse
@@ -47,7 +47,10 @@ class DataLoaderService:
             if not question_id or question_id in question_ids_seen:
                 continue
             
-            topic_info = question_topic_map.get(question_id, {})
+            if question_id not in question_topic_map:
+                continue
+            
+            topic_info = question_topic_map[question_id]
             
             question = Question(
                 question_id=question_id,
@@ -62,12 +65,15 @@ class DataLoaderService:
         return questions
     
     @staticmethod
-    def calculate_question_difficulties(progress_data: List[Dict]) -> Dict[str, float]:
+    def calculate_question_difficulties(progress_data: List[Dict], 
+                                        valid_question_ids: Optional[Set[str]] = None) -> Dict[str, float]:
         """
         Tính độ khó của các câu hỏi từ dữ liệu lịch sử
         
         Args:
             progress_data: Dữ liệu từ user_question_progress
+            valid_question_ids: Set các question_id hợp lệ (từ topic_questions_asvab.csv).
+                               Nếu None, sẽ tính cho tất cả câu hỏi.
         
         Returns:
             Dict mapping question_id -> difficulty (trong thang Standard Normal [-3, +3])
@@ -76,6 +82,10 @@ class DataLoaderService:
         
         for row in progress_data:
             question_id = str(row.get('questionId', ''))
+            
+            if valid_question_ids is not None and question_id not in valid_question_ids:
+                continue
+            
             choices_selected = row.get('choicesSelected', [])
             
             played_times_str = row.get('playedTimes', '[]')

@@ -45,7 +45,7 @@ def load_questions_and_difficulties():
     if _questions_cache is not None and _difficulties_cache is not None:
         return _questions_cache, _difficulties_cache
     
-    progress_file = "user_question_progress_100000.json"
+    progress_file = "user_question_progress_1000000.json"
     topic_file = "topic_questions_asvab.csv"
     
     if not os.path.exists(progress_file):
@@ -69,8 +69,10 @@ def load_questions_and_difficulties():
             else:
                 topic_data = list(reader)
     
+    valid_question_ids = {str(row.get('question_id', '')) for row in topic_data if row.get('question_id')}
+    
     questions = DataLoaderService.load_questions_from_data(progress_data, topic_data)
-    difficulties = DataLoaderService.calculate_question_difficulties(progress_data)
+    difficulties = DataLoaderService.calculate_question_difficulties(progress_data, valid_question_ids)
     
     _questions_cache = questions
     _difficulties_cache = difficulties
