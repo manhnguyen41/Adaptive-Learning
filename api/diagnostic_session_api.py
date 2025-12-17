@@ -119,6 +119,42 @@ def _build_preview_response_for_session(
         question_difficulties=difficulties,
     )
 
+    remaining_candidates = [
+        q for q in candidate_questions 
+        if q.question_id != current_question.question_id
+    ]
+    
+    if topic_question_counts:
+        current_main_topic = str(current_question.main_topic_id) if current_question.main_topic_id else ""
+        current_sub_topic = str(current_question.sub_topic_id) if current_question.sub_topic_id else ""
+        
+        if current_main_topic and current_main_topic in topic_question_counts:
+            topic_answered_counts[current_main_topic] = topic_answered_counts.get(current_main_topic, 0) + 1
+        elif current_sub_topic and current_sub_topic in topic_question_counts:
+            topic_answered_counts[current_sub_topic] = topic_answered_counts.get(current_sub_topic, 0) + 1
+        
+        filtered_remaining = []
+        for q in remaining_candidates:
+            main_topic_id = str(q.main_topic_id) if q.main_topic_id else ""
+            sub_topic_id = str(q.sub_topic_id) if q.sub_topic_id else ""
+            
+            should_include = True
+            if main_topic_id in topic_question_counts:
+                required_count = topic_question_counts[main_topic_id]
+                answered_count = topic_answered_counts.get(main_topic_id, 0)
+                if answered_count >= required_count:
+                    should_include = False
+            elif sub_topic_id in topic_question_counts:
+                required_count = topic_question_counts[sub_topic_id]
+                answered_count = topic_answered_counts.get(sub_topic_id, 0)
+                if answered_count >= required_count:
+                    should_include = False
+            
+            if should_include:
+                filtered_remaining.append(q)
+        
+        remaining_candidates = filtered_remaining
+
     answer_correct = UserResponse(
         question_id=current_question.question_id,
         is_correct=True,
@@ -135,13 +171,13 @@ def _build_preview_response_for_session(
     )
 
     next_if_correct = selector.select_next_question(
-        candidate_questions=candidate_questions,
+        candidate_questions=remaining_candidates,
         user_responses=user_responses + [answer_correct],
         question_difficulties=difficulties,
     )
 
     next_if_incorrect = selector.select_next_question(
-        candidate_questions=candidate_questions,
+        candidate_questions=remaining_candidates,
         user_responses=user_responses + [answer_incorrect],
         question_difficulties=difficulties,
     )
