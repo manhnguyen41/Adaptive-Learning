@@ -10,7 +10,7 @@ services:
       - "8000:8000"
     volumes:
       # Mount data files nếu muốn update mà không rebuild image
-      - ./user_question_progress_100000.json:/app/user_question_progress_100000.json:ro
+      - ./user_question_progress_1000000.json:/app/user_question_progress_1000000.json:ro
       - ./topic_questions_asvab.csv:/app/topic_questions_asvab.csv:ro
     environment:
       - PYTHONUNBUFFERED=1
