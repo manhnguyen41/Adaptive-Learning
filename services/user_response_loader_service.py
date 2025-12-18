@@ -132,4 +132,59 @@ class UserResponseLoaderService:
             user_responses_map[row_user_id].append(response)
         
         return dict(user_responses_map)
+    
+    @staticmethod
+    def load_all_responses(progress_data: List[Dict]) -> List[UserResponse]:
+        """
+        Load tất cả responses từ progress_data (không filter theo user)
+        Dùng để tính expected_time cho các câu hỏi
+        
+        Args:
+            progress_data: Dữ liệu từ user_question_progress
+            
+        Returns:
+            Danh sách tất cả UserResponse
+        """
+        responses = []
+        
+        for row in progress_data:
+            question_id = str(row.get('questionId', ''))
+            if not question_id:
+                continue
+            
+            choices_selected = row.get('choicesSelected', [])
+            
+            played_times_str = row.get('playedTimes', '[]')
+            try:
+                played_times = json.loads(played_times_str) if played_times_str else []
+                if played_times: 
+                    start_time = played_times[-1].get('startTime', 0)
+                    end_time = played_times[-1].get('endTime', 0)
+                    response_time = (end_time - start_time) / 1000.0  
+                else:
+                    response_time = 30.0  
+            except:
+                response_time = 30.0
+            
+            histories = row.get('histories', [])
+            if not isinstance(histories, list) or len(histories) == 0:
+                is_correct = False
+            else:
+                is_correct = (histories[-1] == 1)
+            
+            if not isinstance(choices_selected, list) or len(choices_selected) == 0:
+                choice_selected = -1
+            else:
+                choice_selected = choices_selected[0]
+            
+            response = UserResponse(
+                question_id=question_id,
+                is_correct=is_correct,
+                response_time=response_time,
+                timestamp=row.get('lastUpdate', 0),
+                choice_selected=choice_selected
+            )
+            responses.append(response)
+        
+        return responses
 

@@ -6,6 +6,7 @@ API để tính xác suất đậu bài thi thật của người học
 from fastapi import APIRouter, HTTPException
 from typing import List, Dict
 import random
+import json
 from api.schemas import (
     PassingProbabilityRequest,
     PassingProbabilityResponse,
@@ -121,16 +122,37 @@ async def calculate_passing_probability(request: PassingProbabilityRequest):
         questions, question_difficulties = load_questions_and_difficulties()
         
         if request.user_responses:
-            user_responses: List[UserResponse] = [
-                UserResponse(
-                    question_id=ans.question_id,
-                    is_correct=ans.is_correct,
-                    response_time=30.0,
-                    timestamp=0,
-                    choice_selected=-1,
+            user_responses: List[UserResponse] = []
+            for ans in request.user_responses:
+                is_correct = False
+                if ans.histories and len(ans.histories) > 0:
+                    is_correct = ans.histories[-1] == 1
+                
+                choice_selected = -1
+                if ans.choicesSelected and len(ans.choicesSelected) > 0:
+                    choice_selected = ans.choicesSelected[0]
+                
+                response_time = 30.0 
+                try:
+                    played_times = json.loads(ans.playedTimes)
+                    if played_times and len(played_times) > 0:
+                        time_data = played_times[0]
+                        start_time = time_data.get("startTime", 0)
+                        end_time = time_data.get("endTime", 0)
+                        if end_time > start_time:
+                            response_time = (end_time - start_time) / 1000.0  
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass  
+                
+                user_responses.append(
+                    UserResponse(
+                        question_id=str(ans.questionId),
+                        is_correct=is_correct,
+                        response_time=response_time,
+                        timestamp=0,
+                        choice_selected=choice_selected,
+                    )
                 )
-                for ans in request.user_responses
-            ]
         else:
             user_responses = UserResponseLoaderService.load_user_responses(
                 progress_data,
@@ -149,6 +171,8 @@ async def calculate_passing_probability(request: PassingProbabilityRequest):
         irt_model = IRTModel(guessing_param=0.25)
         ability_estimator = AbilityEstimatorService(irt_model)
         passing_prob_service = PassingProbabilityService(irt_model, ability_estimator)
+        
+        all_responses = UserResponseLoaderService.load_all_responses(progress_data)
         
         exam_questions = []
         
@@ -183,7 +207,8 @@ async def calculate_passing_probability(request: PassingProbabilityRequest):
                 passing_threshold=request.exam_structure.passing_threshold,
                 user_responses=user_responses,
                 question_difficulties=question_difficulties,
-                total_score=request.exam_structure.total_score
+                total_score=request.exam_structure.total_score,
+                all_responses_for_expected_time=all_responses
             )
         
         return PassingProbabilityResponse(

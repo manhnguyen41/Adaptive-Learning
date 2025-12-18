@@ -65,9 +65,12 @@ async def estimate_ability(
                 detail=f"Không tìm thấy dữ liệu trả lời cho user {request.user_id}"
             )
         
+        all_responses = UserResponseLoaderService.load_all_responses(progress_data)
+        
         ability, confidence = estimator.estimate_ability(
             user_responses,
-            question_difficulties
+            question_difficulties,
+            all_responses_for_expected_time=all_responses
         )
         
         question_topic_map = get_question_topic_map()
@@ -77,7 +80,8 @@ async def estimate_ability(
             question_topic_map,
             question_difficulties,
             topic_type="main",
-            min_responses=3
+            min_responses=1,
+            all_responses_for_expected_time=all_responses
         )
         
         sub_topic_abilities_dict = estimator.estimate_topic_abilities(
@@ -85,7 +89,8 @@ async def estimate_ability(
             question_topic_map,
             question_difficulties,
             topic_type="sub",
-            min_responses=3
+            min_responses=1,
+            all_responses_for_expected_time=all_responses
         )
         
         main_topic_abilities = [
@@ -159,6 +164,8 @@ async def estimate_abilities_batch(
             request.user_ids
         )
         
+        all_responses = UserResponseLoaderService.load_all_responses(progress_data)
+        
         results = []
         successful_count = 0
         failed_count = 0
@@ -181,7 +188,8 @@ async def estimate_abilities_batch(
                 try:
                     ability, confidence = estimator.estimate_ability(
                         user_responses,
-                        question_difficulties
+                        question_difficulties,
+                        all_responses_for_expected_time=all_responses
                     )
                     
                     main_topic_abilities_dict = estimator.estimate_topic_abilities(
@@ -189,7 +197,8 @@ async def estimate_abilities_batch(
                         question_topic_map,
                         question_difficulties,
                         topic_type="main",
-                        min_responses=3
+                        min_responses=1,
+                        all_responses_for_expected_time=all_responses
                     )
                     
                     sub_topic_abilities_dict = estimator.estimate_topic_abilities(
@@ -197,7 +206,8 @@ async def estimate_abilities_batch(
                         question_topic_map,
                         question_difficulties,
                         topic_type="sub",
-                        min_responses=3
+                        min_responses=1,
+                        all_responses_for_expected_time=all_responses
                     )
                     
                     main_topic_abilities = [

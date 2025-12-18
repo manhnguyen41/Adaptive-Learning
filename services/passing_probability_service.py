@@ -27,7 +27,8 @@ class PassingProbabilityService:
         passing_threshold: float,
         user_responses: List[UserResponse],
         question_difficulties: Dict[str, float],
-        total_score: int = None
+        total_score: int = None,
+        all_responses_for_expected_time: List[UserResponse] = None
     ) -> Tuple[float, float, str, float, Dict]:
         """
         Tính xác suất đậu bài thi thật
@@ -53,7 +54,8 @@ class PassingProbabilityService:
         
         ability, ability_confidence = self.ability_estimator.estimate_ability(
             user_responses,
-            question_difficulties
+            question_difficulties,
+            all_responses_for_expected_time=all_responses_for_expected_time
         )
         
         question_probs = []
