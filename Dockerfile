@@ -36,7 +36,7 @@ COPY requirements.txt .
 # Copy data files (optional - có thể mount volume thay vì copy)
 # Nếu file quá lớn, nên mount volume hoặc download từ storage service
 COPY topic_questions_asvab.csv .
-COPY user_question_progress_100000.json .
+COPY user_question_progress_1000000.json .
 
 # Create non-root user để tăng bảo mật
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
