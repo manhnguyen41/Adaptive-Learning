@@ -3,7 +3,8 @@ Ability Estimator Service
 """
 
 import math
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, Optional
+from collections import defaultdict
 
 from models.user_response import UserResponse
 from models.irt_model import IRTModel
@@ -11,16 +12,107 @@ from models.irt_model import IRTModel
 class AbilityEstimatorService:
     """
     Service để ước tính năng lực người học dựa trên lịch sử trả lời
+    Tích hợp thời gian trả lời vào tính toán (Time-Weighted Information)
     """
     
-    def __init__(self, irt_model: IRTModel):
+    def __init__(self, irt_model: IRTModel, use_time_weighting: bool = True, time_scale: float = 20.0):
+        """
+        Args:
+            irt_model: IRT model để tính probability và information
+            use_time_weighting: Có sử dụng trọng số thời gian không (mặc định: True)
+            time_scale: Tham số điều chỉnh độ nhạy của time weight (mặc định: 20.0 giây)
+        """
         self.irt_model = irt_model
+        self.use_time_weighting = use_time_weighting
+        self.time_scale = time_scale
+    
+    def _calculate_expected_times(self, responses: List[UserResponse]) -> Dict[str, float]:
+        """
+        Tính thời gian trung bình (expected_time) cho mỗi câu hỏi từ responses
+        
+        Args:
+            responses: Danh sách responses để tính expected_time
+            
+        Returns:
+            Dict mapping question_id -> expected_time (giây)
+        """
+        question_times = defaultdict(list)
+        
+        for response in responses:
+            if response.response_time > 0:  
+                question_times[response.question_id].append(response.response_time)
+        
+        expected_times = {}
+        for question_id, times in question_times.items():
+            if times:
+                expected_times[question_id] = sum(times) / len(times)
+            else:
+                expected_times[question_id] = 30.0 
+        
+        return expected_times
+    
+    def _calculate_time_weight(self, response_time: float, expected_time: float) -> float:
+        """
+        Tính trọng số thời gian dựa trên response_time và expected_time
+        
+        Args:
+            response_time: Thời gian trả lời thực tế (giây)
+            expected_time: Thời gian trung bình cho câu hỏi này (giây)
+            
+        Returns:
+            Time weight (0.0 - 2.0)
+        """
+        if not self.use_time_weighting:
+            return 1.0
+        
+        if expected_time <= 0:
+            return 1.0
+        
+        time_ratio = response_time / expected_time
+        
+        if time_ratio <= 0.5:
+            return 1.2
+        elif time_ratio <= 0.8:
+            return 1.1
+        elif time_ratio <= 1.0:
+            return 1.0
+        elif time_ratio <= 1.5:
+            return 0.9
+        elif time_ratio <= 2.0:
+            return 0.7
+        else:
+            return 0.5
+    
+    def _calculate_time_weight_sigmoid(self, response_time: float, expected_time: float) -> float:
+        """
+        Tính trọng số thời gian sử dụng sigmoid function (phương án thay thế)
+        
+        Args:
+            response_time: Thời gian trả lời thực tế (giây)
+            expected_time: Thời gian trung bình cho câu hỏi này (giây)
+            
+        Returns:
+            Time weight (0.0 - 2.0)
+        """
+        if not self.use_time_weighting:
+            return 1.0
+        
+        if expected_time <= 0:
+            return 1.0
+        
+        time_diff = response_time - expected_time
+        sigmoid_input = -time_diff / self.time_scale
+        
+        weight = 1.0 / (1.0 + math.exp(sigmoid_input))
+        
+        return max(0.3, min(1.5, 0.7 + 0.6 * weight))
     
     def estimate_ability(self, responses: List[UserResponse], 
                         question_difficulties: Dict[str, float],
                         initial_ability: float = 0.0,
                         max_iterations: int = 10,
-                        tolerance: float = 0.001) -> Tuple[float, float]:
+                        tolerance: float = 0.001,
+                        all_responses_for_expected_time: Optional[List[UserResponse]] = None) -> Tuple[float, float]:
         """
         Ước tính năng lực sử dụng Maximum Likelihood Estimation (MLE)
         
@@ -29,6 +121,9 @@ class AbilityEstimatorService:
             question_difficulties: Dict mapping question_id -> difficulty (Standard Normal)
             initial_ability: Giá trị khởi tạo
             max_iterations: Số lần lặp tối đa
+            tolerance: Ngưỡng dừng khi thay đổi ability < tolerance
+            all_responses_for_expected_time: Tất cả responses để tính expected_time 
+                                            (nếu None, dùng responses hiện tại)
         
         Returns:
             Tuple (ability, confidence) - ability trong thang Standard Normal
@@ -37,8 +132,13 @@ class AbilityEstimatorService:
             return initial_ability, 0.0
         
         ability = initial_ability
-
         c = self.irt_model.guessing_param
+        
+        if self.use_time_weighting:
+            responses_for_expected = all_responses_for_expected_time if all_responses_for_expected_time else responses
+            expected_times = self._calculate_expected_times(responses_for_expected)
+        else:
+            expected_times = {}
         
         for _ in range(max_iterations):
             likelihood_derivative = 0.0
@@ -59,6 +159,12 @@ class AbilityEstimatorService:
                 likelihood_derivative += score
 
                 info = self.irt_model.information(ability, difficulty)
+                
+                if self.use_time_weighting:
+                    expected_time = expected_times.get(response.question_id, 30.0)
+                    time_weight = self._calculate_time_weight(response.response_time, expected_time)
+                    info = info * time_weight
+                
                 information += info
             
             if information <= 1e-9:
@@ -85,7 +191,8 @@ class AbilityEstimatorService:
                                  question_topic_map: Dict[str, Dict[str, str]],
                                  question_difficulties: Dict[str, float],
                                  topic_type: str = "main",
-                                 min_responses: int = 3) -> Dict[str, Tuple[float, float, int]]:
+                                 min_responses: int = 1,
+                                 all_responses_for_expected_time: Optional[List[UserResponse]] = None) -> Dict[str, Tuple[float, float, int]]:
         """
         Ước tính năng lực theo từng topic
         
@@ -122,7 +229,8 @@ class AbilityEstimatorService:
             
             ability, confidence = self.estimate_ability(
                 topic_resp,
-                question_difficulties
+                question_difficulties,
+                all_responses_for_expected_time=all_responses_for_expected_time
             )
             topic_abilities[topic_id] = (ability, confidence, num_resp)
         

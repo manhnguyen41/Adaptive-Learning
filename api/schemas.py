@@ -580,15 +580,22 @@ class ExamStructure(BaseModel):
         }
 
 
+class UserAnswerDetail(BaseModel):
+    type: int = Field(..., description="Loại câu hỏi")
+    questionId: int = Field(..., description="ID của câu hỏi")
+    playedTimes: str = Field(..., description="JSON string chứa thời gian chơi")
+    choicesSelected: List[int] = Field(..., description="Danh sách lựa chọn đã chọn")
+    histories: List[int] = Field(..., description="Lịch sử trả lời (phần tử cuối cùng: 0=sai, 1=đúng)")
+
+
 class PassingProbabilityRequest(BaseModel):
     """Request để tính passing probability"""
     user_id: str = Field(..., description="ID của user cần tính xác suất đậu")
     exam_structure: ExamStructure = Field(..., description="Cấu trúc đề thi thật")
-    user_responses: Optional[List[DiagnosticUserAnswer]] = Field(
+    user_responses: Optional[List[UserAnswerDetail]] = Field(
         default=None,
         description=(
             "Lịch sử trả lời câu hỏi của user trong bài diagnostic (nếu truyền sẽ dùng thay vì load từ file). "
-            "Format giống DiagnosticUserAnswer."
         ),
     )
     
@@ -611,8 +618,13 @@ class PassingProbabilityRequest(BaseModel):
                     "passing_threshold": 0.7,
                 },
                 "user_responses": [
-                    {"question_id": "4515379877511168", "is_correct": True},
-                    {"question_id": "5515379877511169", "is_correct": False},
+                    {
+                        "type": 10,
+                        "questionId": 4515379877511168,
+                        "playedTimes": "[{\"startTime\":1743147855291,\"endTime\":1743147860256}]",
+                        "choicesSelected": [3],
+                        "histories": [0, 1, 1]
+                    },
                 ],
             }
         }
