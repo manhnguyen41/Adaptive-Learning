@@ -17,6 +17,7 @@ _difficulties_cache = None
 _progress_data_cache = None
 _topic_meta_cache = None
 _question_topic_map_cache = None
+_all_responses_cache = None
 
 # Config
 PROGRESS_FILE = "user_question_progress_1000000.json"
@@ -159,14 +160,29 @@ def get_ability_estimator() -> AbilityEstimatorService:
     return AbilityEstimatorService(irt_model)
 
 
+def load_all_responses():
+    """Load tất cả responses từ progress_data (có cache)"""
+    global _all_responses_cache
+    
+    if _all_responses_cache is not None:
+        return _all_responses_cache
+    
+    from services.user_response_loader_service import UserResponseLoaderService
+    progress_data = load_progress_data()
+    _all_responses_cache = UserResponseLoaderService.load_all_responses(progress_data)
+    
+    return _all_responses_cache
+
+
 def clear_cache():
     """Clear tất cả cache - dùng cho testing hoặc reload data"""
     global _questions_cache, _difficulties_cache, _progress_data_cache
-    global _topic_meta_cache, _question_topic_map_cache
+    global _topic_meta_cache, _question_topic_map_cache, _all_responses_cache
     
     _questions_cache = None
     _difficulties_cache = None
     _progress_data_cache = None
     _topic_meta_cache = None
     _question_topic_map_cache = None
+    _all_responses_cache = None
 

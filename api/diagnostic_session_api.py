@@ -15,6 +15,7 @@ from api.schemas import (
     DiagnosticResultResponse,
     DiagnosticPreviewQuestion,
     DiagnosticPreviewBranches,
+    DiagnosticUserAnswer,
     TopicAbility,
 )
 from api.shared import (
@@ -47,6 +48,52 @@ def _filter_questions_by_topics(
     ]
 
 
+def _get_current_active_topic(
+    session: DiagnosticSessionProgress,
+    topic_question_counts: Optional[Dict[str, int]],
+    question_topic_map: Dict[str, Dict[str, str]],
+) -> Optional[str]:
+    """
+    Xác định topic hiện tại đang làm.
+    Logic: Làm lần lượt từng topic, hết số câu của topic này rồi mới đến topic khác.
+    
+    Returns:
+        topic_id hiện tại đang làm, hoặc None nếu chưa có topic nào hoặc đã hết topic
+    """
+    if not topic_question_counts:
+        return None
+    
+    topic_answered_counts: Dict[str, int] = {}
+    for ans in session.answers:
+        topic_info = question_topic_map.get(ans.question_id, {})
+        main_topic_id = str(topic_info.get("main_topic_id", ""))
+        sub_topic_id = str(topic_info.get("sub_topic_id", ""))
+        
+        if main_topic_id and main_topic_id in topic_question_counts:
+            topic_answered_counts[main_topic_id] = topic_answered_counts.get(main_topic_id, 0) + 1
+        elif sub_topic_id and sub_topic_id in topic_question_counts:
+            topic_answered_counts[sub_topic_id] = topic_answered_counts.get(sub_topic_id, 0) + 1
+    
+    for topic_id, required_count in topic_question_counts.items():
+        answered_count = topic_answered_counts.get(topic_id, 0)
+        if answered_count < required_count:
+            return topic_id
+    
+    return None
+
+
+def _filter_questions_by_topic(
+    questions: List[Question],
+    topic_id: str,
+) -> List[Question]:
+    """Lọc câu hỏi chỉ từ topic cụ thể."""
+    return [
+        q
+        for q in questions
+        if str(q.main_topic_id) == topic_id or str(q.sub_topic_id) == topic_id
+    ]
+
+
 def _build_preview_response_for_session(
     selector: QuestionSelectorService,
     questions: List[Question],
@@ -58,48 +105,29 @@ def _build_preview_response_for_session(
     """
     Core logic: từ session Diagnostic (các câu đã làm) => chọn current_question
     và preview trước 2 nhánh if_correct / if_incorrect cho current_question đó.
-    
-    Nếu topic_question_counts được cung cấp, sẽ lọc các topic đã đủ số câu hỏi.
     """
     topic_meta_map = get_topic_meta_map()
-    candidate_questions = _filter_questions_by_topics(questions, coverage_topics)
+    question_topic_map = get_question_topic_map()
     
+    all_candidate_questions = _filter_questions_by_topics(questions, coverage_topics)
+    
+    current_topic_id = None
     if topic_question_counts:
-        question_topic_map = get_question_topic_map()
+        current_topic_id = _get_current_active_topic(
+            session=session,
+            topic_question_counts=topic_question_counts,
+            question_topic_map=question_topic_map,
+        )
         
-        topic_answered_counts: Dict[str, int] = {}
-        for ans in session.answers:
-            topic_info = question_topic_map.get(ans.question_id, {})
-            main_topic_id = str(topic_info.get("main_topic_id", ""))
-            sub_topic_id = str(topic_info.get("sub_topic_id", ""))
-            
-            if main_topic_id and main_topic_id in topic_question_counts:
-                topic_answered_counts[main_topic_id] = topic_answered_counts.get(main_topic_id, 0) + 1
-            elif sub_topic_id and sub_topic_id in topic_question_counts:
-                topic_answered_counts[sub_topic_id] = topic_answered_counts.get(sub_topic_id, 0) + 1
+        if current_topic_id is None:
+            raise ValueError("Tất cả các topic đã hoàn thành. Không còn câu hỏi nào để chọn.")
         
-        filtered_candidate_questions = []
-        for q in candidate_questions:
-            main_topic_id = str(q.main_topic_id) if q.main_topic_id else ""
-            sub_topic_id = str(q.sub_topic_id) if q.sub_topic_id else ""
-            
-            # Kiểm tra xem topic này có bị giới hạn số câu không
-            should_include = True
-            if main_topic_id in topic_question_counts:
-                required_count = topic_question_counts[main_topic_id]
-                answered_count = topic_answered_counts.get(main_topic_id, 0)
-                if answered_count >= required_count:
-                    should_include = False
-            elif sub_topic_id in topic_question_counts:
-                required_count = topic_question_counts[sub_topic_id]
-                answered_count = topic_answered_counts.get(sub_topic_id, 0)
-                if answered_count >= required_count:
-                    should_include = False
-            
-            if should_include:
-                filtered_candidate_questions.append(q)
-        
-        candidate_questions = filtered_candidate_questions
+        candidate_questions = _filter_questions_by_topic(
+            all_candidate_questions,
+            current_topic_id,
+        )
+    else:
+        candidate_questions = all_candidate_questions
 
     user_responses: List[UserResponse] = []
     for ans in session.answers:
@@ -119,41 +147,45 @@ def _build_preview_response_for_session(
         question_difficulties=difficulties,
     )
 
-    remaining_candidates = [
-        q for q in candidate_questions 
-        if q.question_id != current_question.question_id
-    ]
-    
-    if topic_question_counts:
-        current_main_topic = str(current_question.main_topic_id) if current_question.main_topic_id else ""
-        current_sub_topic = str(current_question.sub_topic_id) if current_question.sub_topic_id else ""
+    def _get_preview_candidate_questions(
+        session_with_answer: DiagnosticSessionProgress,
+        current_topic_id: Optional[str],
+        all_candidate_questions: List[Question],
+        current_question: Question,
+        topic_question_counts: Optional[Dict[str, int]],
+        question_topic_map: Dict[str, Dict[str, str]],
+    ) -> List[Question]:
+        """
+        Lấy danh sách câu hỏi candidate cho preview next question.
+        Nếu topic hiện tại vẫn còn câu hỏi thì chọn từ topic đó,
+        nếu không thì chọn từ topic tiếp theo.
+        """
+        if not topic_question_counts:
+            remaining = [
+                q for q in all_candidate_questions
+                if q.question_id != current_question.question_id
+            ]
+            return remaining
         
-        if current_main_topic and current_main_topic in topic_question_counts:
-            topic_answered_counts[current_main_topic] = topic_answered_counts.get(current_main_topic, 0) + 1
-        elif current_sub_topic and current_sub_topic in topic_question_counts:
-            topic_answered_counts[current_sub_topic] = topic_answered_counts.get(current_sub_topic, 0) + 1
+        next_topic_id = _get_current_active_topic(
+            session=session_with_answer,
+            topic_question_counts=topic_question_counts,
+            question_topic_map=question_topic_map,
+        )
         
-        filtered_remaining = []
-        for q in remaining_candidates:
-            main_topic_id = str(q.main_topic_id) if q.main_topic_id else ""
-            sub_topic_id = str(q.sub_topic_id) if q.sub_topic_id else ""
-            
-            should_include = True
-            if main_topic_id in topic_question_counts:
-                required_count = topic_question_counts[main_topic_id]
-                answered_count = topic_answered_counts.get(main_topic_id, 0)
-                if answered_count >= required_count:
-                    should_include = False
-            elif sub_topic_id in topic_question_counts:
-                required_count = topic_question_counts[sub_topic_id]
-                answered_count = topic_answered_counts.get(sub_topic_id, 0)
-                if answered_count >= required_count:
-                    should_include = False
-            
-            if should_include:
-                filtered_remaining.append(q)
+        if next_topic_id is None:
+            return []
         
-        remaining_candidates = filtered_remaining
+        topic_questions = _filter_questions_by_topic(
+            all_candidate_questions,
+            next_topic_id,
+        )
+        
+        answered_ids = {ans.question_id for ans in session_with_answer.answers}
+        return [
+            q for q in topic_questions
+            if q.question_id not in answered_ids
+        ]
 
     answer_correct = UserResponse(
         question_id=current_question.question_id,
@@ -170,17 +202,59 @@ def _build_preview_response_for_session(
         choice_selected=-1,
     )
 
-    next_if_correct = selector.select_next_question(
-        candidate_questions=remaining_candidates,
-        user_responses=user_responses + [answer_correct],
-        question_difficulties=difficulties,
+    session_if_correct = DiagnosticSessionProgress(
+        user_id=session.user_id,
+        answers=session.answers + [
+            DiagnosticUserAnswer(
+                question_id=current_question.question_id,
+                is_correct=True,
+            )
+        ],
+    )
+    session_if_incorrect = DiagnosticSessionProgress(
+        user_id=session.user_id,
+        answers=session.answers + [
+            DiagnosticUserAnswer(
+                question_id=current_question.question_id,
+                is_correct=False,
+            )
+        ],
     )
 
-    next_if_incorrect = selector.select_next_question(
-        candidate_questions=remaining_candidates,
-        user_responses=user_responses + [answer_incorrect],
-        question_difficulties=difficulties,
+    preview_candidates_if_correct = _get_preview_candidate_questions(
+        session_if_correct,
+        current_topic_id,
+        all_candidate_questions,
+        current_question,
+        topic_question_counts,
+        question_topic_map,
     )
+    preview_candidates_if_incorrect = _get_preview_candidate_questions(
+        session_if_incorrect,
+        current_topic_id,
+        all_candidate_questions,
+        current_question,
+        topic_question_counts,
+        question_topic_map,
+    )
+
+    if preview_candidates_if_correct:
+        next_if_correct = selector.select_next_question(
+            candidate_questions=preview_candidates_if_correct,
+            user_responses=user_responses + [answer_correct],
+            question_difficulties=difficulties,
+        )
+    else:
+        next_if_correct = current_question
+
+    if preview_candidates_if_incorrect:
+        next_if_incorrect = selector.select_next_question(
+            candidate_questions=preview_candidates_if_incorrect,
+            user_responses=user_responses + [answer_incorrect],
+            question_difficulties=difficulties,
+        )
+    else:
+        next_if_incorrect = current_question
 
     def _resolve_topic_info(q: Question) -> Dict[str, str]:
         topic_id = str(q.main_topic_id or q.sub_topic_id)
@@ -192,20 +266,27 @@ def _build_preview_response_for_session(
     correct_topic_info = _resolve_topic_info(next_if_correct)
     incorrect_topic_info = _resolve_topic_info(next_if_incorrect)
 
+    current_difficulty = difficulties.get(current_question.question_id, 0.0)
+    correct_difficulty = difficulties.get(next_if_correct.question_id, 0.0)
+    incorrect_difficulty = difficulties.get(next_if_incorrect.question_id, 0.0)
+
     current_preview = DiagnosticPreviewQuestion(
         question_id=current_question.question_id,
         topic_id=current_topic_info["topic_id"],
         topic_name=current_topic_info["topic_name"],
+        difficulty=current_difficulty,
     )
     if_correct_preview = DiagnosticPreviewQuestion(
         question_id=next_if_correct.question_id,
         topic_id=correct_topic_info["topic_id"],
         topic_name=correct_topic_info["topic_name"],
+        difficulty=correct_difficulty,
     )
     if_incorrect_preview = DiagnosticPreviewQuestion(
         question_id=next_if_incorrect.question_id,
         topic_id=incorrect_topic_info["topic_id"],
         topic_name=incorrect_topic_info["topic_name"],
+        difficulty=incorrect_difficulty,
     )
 
     return DiagnosticPreviewResponse(

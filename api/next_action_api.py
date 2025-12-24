@@ -17,6 +17,7 @@ from api.shared import (
     load_progress_data,
     get_ability_estimator,
     get_question_topic_map,
+    load_all_responses,
 )
 from services.user_response_loader_service import UserResponseLoaderService
 from services.ability_estimator_service import AbilityEstimatorService
@@ -65,7 +66,7 @@ async def estimate_ability(
                 detail=f"Không tìm thấy dữ liệu trả lời cho user {request.user_id}"
             )
         
-        all_responses = UserResponseLoaderService.load_all_responses(progress_data)
+        all_responses = load_all_responses()
         
         ability, confidence = estimator.estimate_ability(
             user_responses,
@@ -164,7 +165,7 @@ async def estimate_abilities_batch(
             request.user_ids
         )
         
-        all_responses = UserResponseLoaderService.load_all_responses(progress_data)
+        all_responses = load_all_responses()
         
         results = []
         successful_count = 0

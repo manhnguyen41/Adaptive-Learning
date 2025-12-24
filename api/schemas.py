@@ -24,6 +24,19 @@ class QuestionResponse(BaseModel):
             }
         }
 
+class QuestionDifficultyResponse(BaseModel):
+    """Response cho API lấy độ khó của câu hỏi"""
+    question_id: str
+    difficulty: float = Field(..., description="Độ khó trong thang Standard Normal [-3, +3]")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "question_id": "4515379877511168",
+                "difficulty": 0.5
+            }
+        }
+
 class DiagnosticQuestionSetRequest(BaseModel):
     """Request để tạo bộ câu hỏi Diagnostic Test"""
     num_questions: int = Field(default=20, ge=1, le=100, description="Số lượng câu hỏi cần chọn")
@@ -77,6 +90,7 @@ class DiagnosticPreviewQuestion(BaseModel):
     topic_name: Optional[str] = Field(
         default=None, description="Tên topic tương ứng (nếu có sẵn)"
     )
+    difficulty: float = Field(..., description="Độ khó trong thang Standard Normal [-3, +3]")
 
 
 class DiagnosticPreviewBranches(BaseModel):
@@ -111,15 +125,18 @@ class DiagnosticPreviewResponse(BaseModel):
                 "current_question": {
                     "question_id": "6448245131706368",
                     "topic_id": "5878262490202112",
+                    "difficulty": 0.5,
                 },
                 "preview_next_question": {
                     "if_correct": {
                         "question_id": "5008459000971264",
                         "topic_id": "5878262490202112",
+                        "difficulty": 0.8,
                     },
                     "if_incorrect": {
                         "question_id": "5430671466037248",
                         "topic_id": "5878262490202112",
+                        "difficulty": 0.3,
                     },
                 },
             }

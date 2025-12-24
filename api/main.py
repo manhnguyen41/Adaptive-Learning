@@ -14,6 +14,7 @@ from api.shared import (
     load_progress_data,
     get_question_topic_map,
     get_topic_meta_map,
+    load_all_responses,
 )
 
 
@@ -38,6 +39,10 @@ async def lifespan(app: FastAPI):
         print("Loading topic meta map...")
         topic_meta_map = get_topic_meta_map()
         print(f"Loaded {len(topic_meta_map)} topic metadata")
+        
+        print("Loading all responses for expected time calculation...")
+        all_responses = load_all_responses()
+        print(f"Loaded {len(all_responses)} total responses")
         
         print("All data loaded successfully! Server is ready.")
     except Exception as e:
