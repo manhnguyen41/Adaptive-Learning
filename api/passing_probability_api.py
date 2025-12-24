@@ -15,6 +15,7 @@ from api.shared import (
     load_questions_and_difficulties,
     load_progress_data,
     get_question_topic_map,
+    load_all_responses,
 )
 from services.user_response_loader_service import UserResponseLoaderService
 from services.ability_estimator_service import AbilityEstimatorService
@@ -172,7 +173,7 @@ async def calculate_passing_probability(request: PassingProbabilityRequest):
         ability_estimator = AbilityEstimatorService(irt_model)
         passing_prob_service = PassingProbabilityService(irt_model, ability_estimator)
         
-        all_responses = UserResponseLoaderService.load_all_responses(progress_data)
+        all_responses = load_all_responses()
         
         exam_questions = []
         
@@ -200,6 +201,8 @@ async def calculate_passing_probability(request: PassingProbabilityRequest):
                 detail="Không thể tạo được danh sách câu hỏi từ cấu trúc đề thi"
             )
         
+        question_topic_map = get_question_topic_map()
+        
         passing_prob, confidence_score, expected_score, exam_info = \
             passing_prob_service.calculate_passing_probability(
                 user_id=request.user_id,
@@ -207,6 +210,7 @@ async def calculate_passing_probability(request: PassingProbabilityRequest):
                 passing_threshold=request.exam_structure.passing_threshold,
                 user_responses=user_responses,
                 question_difficulties=question_difficulties,
+                question_topic_map=question_topic_map,
                 total_score=request.exam_structure.total_score,
                 all_responses_for_expected_time=all_responses
             )

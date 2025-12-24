@@ -27,6 +27,7 @@ class PassingProbabilityService:
         passing_threshold: float,
         user_responses: List[UserResponse],
         question_difficulties: Dict[str, float],
+        question_topic_map: Dict[str, Dict[str, str]] = None,
         total_score: int = None,
         all_responses_for_expected_time: List[UserResponse] = None
     ) -> Tuple[float, float, str, float, Dict]:
@@ -39,6 +40,7 @@ class PassingProbabilityService:
             passing_threshold: Ngưỡng đậu (0-1, ví dụ: 0.7 = 70%)
             user_responses: Lịch sử trả lời của user (để tính ability)
             question_difficulties: Dict mapping question_id -> difficulty (Standard Normal)
+            question_topic_map: Dict mapping question_id -> {main_topic_id, sub_topic_id}
             total_score: Tổng điểm của đề thi. Nếu None, dùng số lượng câu hỏi
         
         Returns:
@@ -52,11 +54,26 @@ class PassingProbabilityService:
         if not exam_questions:
             return 0.0, 0.0, "low", 0.0, {}
         
-        ability, ability_confidence = self.ability_estimator.estimate_ability(
+        overall_ability, overall_ability_confidence = self.ability_estimator.estimate_ability(
             user_responses,
             question_difficulties,
             all_responses_for_expected_time=all_responses_for_expected_time
         )
+        
+        main_topic_abilities = {}
+        if question_topic_map:
+            main_topic_abilities_dict = self.ability_estimator.estimate_topic_abilities(
+                user_responses,
+                question_topic_map,
+                question_difficulties,
+                topic_type="main",
+                min_responses=1,
+                all_responses_for_expected_time=all_responses_for_expected_time
+            )
+            main_topic_abilities = {
+                topic_id: ability_val
+                for topic_id, (ability_val, _, _) in main_topic_abilities_dict.items()
+            }
         
         question_probs = []
         total_difficulty = 0.0
@@ -69,8 +86,15 @@ class PassingProbabilityService:
             if difficulty is None:
                 difficulty = question_difficulties.get(question_id, 0.0)
             
+            ability_to_use = overall_ability
+            if question_topic_map:
+                topic_info = question_topic_map.get(question_id, {})
+                main_topic_id = str(topic_info.get("main_topic_id", ""))
+                if main_topic_id and main_topic_id in main_topic_abilities:
+                    ability_to_use = main_topic_abilities[main_topic_id]
+            
             prob = self.irt_model.probability_correct(
-                ability=ability,
+                ability=ability_to_use,
                 difficulty=difficulty,
                 discrimination=discrimination
             )
@@ -105,7 +129,7 @@ class PassingProbabilityService:
         
         passing_prob = max(0.0, min(100.0, passing_prob * 100.0))
         
-        ability_conf = ability_confidence
+        ability_conf = overall_ability_confidence
         
         num_questions_conf = min(1.0, num_questions / 50.0) 
         
@@ -115,16 +139,46 @@ class PassingProbabilityService:
         else:
             variance_conf = 0.5
         
-        # Tổng hợp confidence
         confidence_score = (ability_conf * 0.5 + num_questions_conf * 0.3 + variance_conf * 0.2)
         confidence_score = max(0.0, min(1.0, confidence_score))
+        
+        topic_statistics = {}
+        if question_topic_map and user_responses:
+            from collections import defaultdict
+            topic_total = defaultdict(int)
+            topic_correct = defaultdict(int)
+            
+            for response in user_responses:
+                topic_info = question_topic_map.get(response.question_id, {})
+                main_topic_id = str(topic_info.get("main_topic_id", ""))
+                
+                if main_topic_id:
+                    topic_total[main_topic_id] += 1
+                    if response.is_correct:
+                        topic_correct[main_topic_id] += 1
+            
+            for topic_id in topic_total:
+                total = topic_total[topic_id]
+                correct = topic_correct[topic_id]
+                accuracy = (correct / total * 100.0) if total > 0 else 0.0
+                
+                topic_statistics[topic_id] = {
+                    "total": total,
+                    "correct": correct,
+                    "accuracy": round(accuracy, 2)
+                }
         
         exam_info = {
             "total_questions": num_questions,
             "average_difficulty": round(avg_difficulty, 2),
             "min_correct_needed": min_correct,
-            "user_ability": round(ability, 2),
-            "ability_confidence": round(ability_confidence, 2)
+            "overall_ability": round(overall_ability, 2),
+            "ability_confidence": round(overall_ability_confidence, 2),
+            "main_topic_abilities": {
+                topic_id: round(ability_val, 2)
+                for topic_id, ability_val in main_topic_abilities.items()
+            } if main_topic_abilities else {},
+            "topic_statistics": topic_statistics
         }
         
         return passing_prob, confidence_score, expected_score, exam_info
@@ -167,4 +221,6 @@ class PassingProbabilityService:
             dp_prev = dp_curr
         
         return dp_prev[k] if k < len(dp_prev) else 0.0
+
+
 

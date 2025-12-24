@@ -8,6 +8,7 @@ from api.schemas import (
     DiagnosticQuestionSetRequest,
     DiagnosticQuestionSetResponse,
     QuestionResponse,
+    QuestionDifficultyResponse,
     AllQuestionsResponse,
     QuestionStatistics,
     QuestionDistributions,
@@ -160,3 +161,45 @@ async def get_all_questions(limit: Optional[int] = None):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi: {str(e)}")
+
+
+@router.get(
+    "/question/{question_id}/difficulty",
+    response_model=QuestionDifficultyResponse,
+    summary="Lấy độ khó của câu hỏi theo question_id"
+)
+async def get_question_difficulty(question_id: str):
+    """
+    Lấy độ khó của một câu hỏi cụ thể theo question_id
+    
+    Args:
+        question_id: ID của câu hỏi cần lấy độ khó
+    
+    Returns:
+        Độ khó của câu hỏi trong thang Standard Normal [-3, +3]
+    """
+    try:
+        _, question_difficulties = load_questions_and_difficulties()
+        
+        if question_id not in question_difficulties:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Không tìm thấy câu hỏi với ID: {question_id}"
+            )
+        
+        difficulty = question_difficulties[question_id]
+        
+        return QuestionDifficultyResponse(
+            question_id=question_id,
+            difficulty=difficulty
+        )
+    
+    except HTTPException:
+        raise
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi khi lấy độ khó câu hỏi: {str(e)}"
+        )
