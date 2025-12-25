@@ -9,13 +9,34 @@ from collections import defaultdict
 from models.user_response import UserResponse
 from models.irt_model import IRTModel
 
+
+def compute_prior_sigma(
+    num_responses: int,
+    sigma_min: float = 0.5,
+    sigma_max: float = 2.0,
+    k: float = 5.0,
+) -> float:
+    """
+    Tính sigma_prior(n) = sigma_min + (sigma_max - sigma_min) * (1 - exp(-n / k)).
+
+    - num_responses: số câu đã trả lời (len(responses))
+    - sigma_min: prior rất chặt khi n nhỏ
+    - sigma_max: prior rất lỏng khi n lớn
+    - k: điều chỉnh tốc độ “nới lỏng” prior theo n
+    """
+    if num_responses <= 0:
+        return sigma_min
+    factor = 1.0 - math.exp(-num_responses / k)
+    return sigma_min + (sigma_max - sigma_min) * factor
+
+
 class AbilityEstimatorService:
     """
     Service để ước tính năng lực người học dựa trên lịch sử trả lời
     Tích hợp thời gian trả lời vào tính toán (Time-Weighted Information)
     """
     
-    def __init__(self, irt_model: IRTModel, use_time_weighting: bool = True, time_scale: float = 20.0):
+    def __init__(self, irt_model: IRTModel, use_time_weighting: bool = False, time_scale: float = 20.0):
         """
         Args:
             irt_model: IRT model để tính probability và information
@@ -107,14 +128,22 @@ class AbilityEstimatorService:
         
         return max(0.3, min(1.5, 0.7 + 0.6 * weight))
     
-    def estimate_ability(self, responses: List[UserResponse], 
-                        question_difficulties: Dict[str, float],
-                        initial_ability: float = 0.0,
-                        max_iterations: int = 10,
-                        tolerance: float = 0.001,
-                        all_responses_for_expected_time: Optional[List[UserResponse]] = None) -> Tuple[float, float]:
+    def estimate_ability(
+        self,
+        responses: List[UserResponse],
+        question_difficulties: Dict[str, float],
+        initial_ability: float = 0.0,
+        max_iterations: int = 10,
+        tolerance: float = 0.001,
+        all_responses_for_expected_time: Optional[List[UserResponse]] = None,
+        use_map: bool = True,
+        sigma_min: float = 0.5,
+        sigma_max: float = 2.0,
+        k_prior: float = 5.0,
+    ) -> Tuple[float, float]:
         """
         Ước tính năng lực sử dụng Maximum Likelihood Estimation (MLE)
+        hoặc Maximum A Posteriori (MAP) với prior Gaussian cho ability.
         
         Args:
             responses: Lịch sử trả lời của người học
@@ -124,6 +153,8 @@ class AbilityEstimatorService:
             tolerance: Ngưỡng dừng khi thay đổi ability < tolerance
             all_responses_for_expected_time: Tất cả responses để tính expected_time 
                                             (nếu None, dùng responses hiện tại)
+            use_map: True => dùng MAP với prior Gaussian; False => MLE thuần
+            sigma_min, sigma_max, k_prior: tham số cho sigma_prior(n)
         
         Returns:
             Tuple (ability, confidence) - ability trong thang Standard Normal
@@ -135,17 +166,23 @@ class AbilityEstimatorService:
         c = self.irt_model.guessing_param
         
         if self.use_time_weighting:
-            responses_for_expected = all_responses_for_expected_time if all_responses_for_expected_time else responses
+            responses_for_expected = (
+                all_responses_for_expected_time
+                if all_responses_for_expected_time
+                else responses
+            )
             expected_times = self._calculate_expected_times(responses_for_expected)
         else:
             expected_times = {}
+
+        num_responses = len(responses)
         
         for _ in range(max_iterations):
             likelihood_derivative = 0.0
             information = 0.0
             
             for response in responses:
-                a = 1
+                a = 1.0
                 difficulty = question_difficulties.get(response.question_id, 0.0)
                 prob = self.irt_model.probability_correct(ability, difficulty)
                 
@@ -162,15 +199,35 @@ class AbilityEstimatorService:
                 
                 if self.use_time_weighting:
                     expected_time = expected_times.get(response.question_id, 30.0)
-                    time_weight = self._calculate_time_weight(response.response_time, expected_time)
+                    time_weight = self._calculate_time_weight(
+                        response.response_time, expected_time
+                    )
                     info = info * time_weight
                 
                 information += info
+
+            if use_map:
+                prior_sigma = compute_prior_sigma(
+                    num_responses=num_responses,
+                    sigma_min=sigma_min,
+                    sigma_max=sigma_max,
+                    k=k_prior,
+                )
+                prior_var = prior_sigma ** 2
+
+                prior_derivative = -ability / prior_var          # d/dθ log p(θ)
+                prior_information = 1.0 / prior_var              # -d²/dθ² log p(θ)
+
+                total_derivative = likelihood_derivative + prior_derivative
+                total_information = information + prior_information
+            else:
+                total_derivative = likelihood_derivative
+                total_information = information
             
-            if information <= 1e-9:
+            if total_information <= 1e-9:
                 break
             
-            change = likelihood_derivative / information
+            change = total_derivative / total_information
 
             change = max(-2.0, min(2.0, change))
 
@@ -181,7 +238,12 @@ class AbilityEstimatorService:
         
         ability = max(-3.0, min(3.0, ability))
 
-        se = 1.0 / math.sqrt(information) if information > 1e-9 else 1.0
+        if use_map and "total_information" in locals() and total_information > 1e-9:
+            info_for_conf = total_information
+        else:
+            info_for_conf = information if information > 1e-9 else 1.0
+
+        se = 1.0 / math.sqrt(info_for_conf)
         confidence = 1.0 / (1.0 + se)
         
         return ability, confidence

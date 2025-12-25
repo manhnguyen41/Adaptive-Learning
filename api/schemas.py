@@ -112,12 +112,16 @@ class DiagnosticPreviewResponse(BaseModel):
       "preview_next_question": {
         "if_correct": {...},
         "if_incorrect": {...}
-      }
+      },
+      "overall_ability": 0.5,
+      "confidence": 0.85
     }
     """
 
     current_question: DiagnosticPreviewQuestion
     preview_next_question: DiagnosticPreviewBranches
+    overall_ability: float = Field(..., description="Năng lực tổng thể hiện tại của người dùng (Standard Normal)")
+    confidence: float = Field(..., description="Độ tin cậy của ước tính năng lực (0-1)")
 
     class Config:
         json_schema_extra = {
@@ -139,6 +143,8 @@ class DiagnosticPreviewResponse(BaseModel):
                         "difficulty": 0.3,
                     },
                 },
+                "overall_ability": 0.5,
+                "confidence": 0.85,
             }
         }
 
@@ -264,6 +270,8 @@ class DiagnosticSubmitAnswerResponse(BaseModel):
 
     success: bool
     message: str
+    overall_ability: float = Field(..., description="Năng lực tổng thể hiện tại của người dùng sau khi trả lời (Standard Normal)")
+    confidence: float = Field(..., description="Độ tin cậy của ước tính năng lực (0-1)")
 
 class DifficultyStatistics(BaseModel):
     """Thống kê về độ khó"""
@@ -356,14 +364,37 @@ class AllQuestionsResponse(BaseModel):
         }
 
 
+class UserAnswerDetail(BaseModel):
+    type: int = Field(..., description="Loại câu hỏi")
+    questionId: int = Field(..., description="ID của câu hỏi")
+    playedTimes: str = Field(..., description="JSON string chứa thời gian chơi")
+    choicesSelected: List[int] = Field(..., description="Danh sách lựa chọn đã chọn")
+    histories: List[int] = Field(..., description="Lịch sử trả lời (phần tử cuối cùng: 0=sai, 1=đúng)")
+
+
 class EstimateAbilityRequest(BaseModel):
     """Request để tính ability của một user"""
     user_id: str = Field(..., description="ID của user cần tính ability")
+    user_responses: Optional[List[UserAnswerDetail]] = Field(
+        default=None,
+        description=(
+            "Lịch sử trả lời câu hỏi của user (nếu truyền sẽ dùng thay vì load từ file). "
+        ),
+    )
     
     class Config:
         json_schema_extra = {
             "example": {
                 "user_id": "77wmmksb6r@privaterelay.appleid.com",
+                "user_responses": [
+                    {
+                        "type": 10,
+                        "questionId": 4515379877511168,
+                        "playedTimes": "[{\"startTime\":1743147855291,\"endTime\":1743147860256}]",
+                        "choicesSelected": [3],
+                        "histories": [0, 1, 1]
+                    },
+                ],
             }
         }
 
@@ -595,14 +626,6 @@ class ExamStructure(BaseModel):
                 "total_score": 100,
             }
         }
-
-
-class UserAnswerDetail(BaseModel):
-    type: int = Field(..., description="Loại câu hỏi")
-    questionId: int = Field(..., description="ID của câu hỏi")
-    playedTimes: str = Field(..., description="JSON string chứa thời gian chơi")
-    choicesSelected: List[int] = Field(..., description="Danh sách lựa chọn đã chọn")
-    histories: List[int] = Field(..., description="Lịch sử trả lời (phần tử cuối cùng: 0=sai, 1=đúng)")
 
 
 class PassingProbabilityRequest(BaseModel):

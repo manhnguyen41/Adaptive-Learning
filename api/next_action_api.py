@@ -4,6 +4,8 @@ API để tính toán năng lực (ability) của user
 """
 
 from fastapi import APIRouter, HTTPException, Depends
+from typing import List
+import json
 from api.schemas import (
     EstimateAbilityRequest,
     UserAbilityResponse,
@@ -21,6 +23,7 @@ from api.shared import (
 )
 from services.user_response_loader_service import UserResponseLoaderService
 from services.ability_estimator_service import AbilityEstimatorService
+from models.user_response import UserResponse
 
 router = APIRouter(prefix="/api/next-action", tags=["Next Action"])
 
@@ -36,7 +39,7 @@ async def estimate_ability(
     Tính toán năng lực (ability) của một user cụ thể dựa trên lịch sử trả lời
     
     API này sẽ:
-    1. Load lịch sử trả lời của user từ dữ liệu
+    1. Load lịch sử trả lời của user từ dữ liệu hoặc sử dụng user_responses từ request
     2. Tính toán ability sử dụng IRT model (MLE)
     3. Trả về ability và độ tin cậy
     
@@ -45,8 +48,12 @@ async def estimate_ability(
     - Giá trị dương: Năng lực trên trung bình
     - Giá trị 0: Năng lực trung bình
     
+    **Lịch sử trả lời:**
+    - Nếu truyền user_responses trong request, API sẽ sử dụng dữ liệu đó thay vì load từ file
+    - Nếu không truyền user_responses, API sẽ load từ dữ liệu đã lưu
+    
     Args:
-        request: Request chứa user_id
+        request: Request chứa user_id và optional user_responses
     
     Returns:
         UserAbilityResponse với overall_ability, confidence và số câu đã trả lời
@@ -55,15 +62,51 @@ async def estimate_ability(
         progress_data = load_progress_data()
         _, question_difficulties = load_questions_and_difficulties()
         
-        user_responses = UserResponseLoaderService.load_user_responses(
-            progress_data, 
-            request.user_id
-        )
+        if request.user_responses:
+            user_responses: List[UserResponse] = []
+            for ans in request.user_responses:
+                is_correct = False
+                if ans.histories and len(ans.histories) > 0:
+                    is_correct = ans.histories[-1] == 1
+                
+                choice_selected = -1
+                if ans.choicesSelected and len(ans.choicesSelected) > 0:
+                    choice_selected = ans.choicesSelected[0]
+                
+                response_time = 30.0 
+                try:
+                    played_times = json.loads(ans.playedTimes)
+                    if played_times and len(played_times) > 0:
+                        time_data = played_times[0]
+                        start_time = time_data.get("startTime", 0)
+                        end_time = time_data.get("endTime", 0)
+                        if end_time > start_time:
+                            response_time = (end_time - start_time) / 1000.0  
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass  
+                
+                user_responses.append(
+                    UserResponse(
+                        question_id=str(ans.questionId),
+                        is_correct=is_correct,
+                        response_time=response_time,
+                        timestamp=0,
+                        choice_selected=choice_selected,
+                    )
+                )
+        else:
+            user_responses = UserResponseLoaderService.load_user_responses(
+                progress_data, 
+                request.user_id
+            )
         
         if not user_responses:
             raise HTTPException(
                 status_code=404, 
-                detail=f"Không tìm thấy dữ liệu trả lời cho user {request.user_id}"
+                detail=(
+                    f"Không tìm thấy dữ liệu trả lời cho user {request.user_id} "
+                    "(truyền user_responses hoặc đảm bảo có dữ liệu đã lưu)."
+                )
             )
         
         all_responses = load_all_responses()

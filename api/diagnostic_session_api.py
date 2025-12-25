@@ -4,7 +4,7 @@ API cho adaptive Diagnostic Test session (init, next question, submit answer, re
 """
 
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from api.schemas import (
     DiagnosticInitRequest,
     DiagnosticNextQuestionRequest,
@@ -24,11 +24,13 @@ from api.shared import (
     get_ability_estimator,
     get_question_topic_map,
     get_topic_meta_map,
+    load_all_responses,
 )
 from services.question_selector_service import QuestionSelectorService
 from services.ability_estimator_service import AbilityEstimatorService
 from models.question import Question
 from models.user_response import UserResponse
+from models.user_ability import UserAbility
 
 router = APIRouter(prefix="/api/diagnostic", tags=["Diagnostic Session"])
 
@@ -94,6 +96,28 @@ def _filter_questions_by_topic(
     ]
 
 
+def _filter_candidates_by_difficulty(
+    candidates: List[Question],
+    difficulties: Dict[str, float],
+    current_difficulty: float,
+    direction: str,
+) -> List[Question]:
+    """
+    Lọc danh sách candidate theo độ khó so với current_difficulty.
+
+    - direction = "up": chỉ giữ câu có độ khó > current_difficulty
+    - direction = "down": chỉ giữ câu có độ khó < current_difficulty
+    """
+    filtered: List[Question] = []
+    for q in candidates:
+        q_diff = difficulties.get(q.question_id, q.difficulty)
+        if direction == "up" and q_diff > current_difficulty:
+            filtered.append(q)
+        elif direction == "down" and q_diff < current_difficulty:
+            filtered.append(q)
+    return filtered
+
+
 def _build_preview_response_for_session(
     selector: QuestionSelectorService,
     questions: List[Question],
@@ -108,9 +132,11 @@ def _build_preview_response_for_session(
     """
     topic_meta_map = get_topic_meta_map()
     question_topic_map = get_question_topic_map()
-    
+    estimator: AbilityEstimatorService = get_ability_estimator()
+    all_responses = load_all_responses()
+
     all_candidate_questions = _filter_questions_by_topics(questions, coverage_topics)
-    
+
     current_topic_id = None
     if topic_question_counts:
         current_topic_id = _get_current_active_topic(
@@ -141,20 +167,68 @@ def _build_preview_response_for_session(
             )
         )
 
-    current_question = selector.select_next_question(
-        candidate_questions=candidate_questions,
-        user_responses=user_responses,
-        question_difficulties=difficulties,
-    )
+    def _build_topic_responses(
+        target_topic_id: Optional[str],
+        session_progress: DiagnosticSessionProgress,
+    ) -> List[UserResponse]:
+        """
+        Lọc các UserResponse thuộc về một topic cụ thể (main hoặc sub).
+        Nếu target_topic_id là None hoặc không có câu nào thuộc topic đó,
+        sẽ trả về toàn bộ responses (fallback dùng ability tổng).
+        """
+        if not target_topic_id:
+            # Không có topic cụ thể => dùng toàn bộ responses
+            return [
+                UserResponse(
+                    question_id=ans.question_id,
+                    is_correct=ans.is_correct,
+                    response_time=30.0,
+                    timestamp=0,
+                    choice_selected=-1,
+                )
+                for ans in session_progress.answers
+            ]
 
-    def _get_preview_candidate_questions(
+        topic_responses: List[UserResponse] = []
+        for ans in session_progress.answers:
+            topic_info = question_topic_map.get(ans.question_id, {})
+            main_topic_id = str(topic_info.get("main_topic_id", ""))
+            sub_topic_id = str(topic_info.get("sub_topic_id", ""))
+
+            if target_topic_id == main_topic_id or target_topic_id == sub_topic_id:
+                topic_responses.append(
+                    UserResponse(
+                        question_id=ans.question_id,
+                        is_correct=ans.is_correct,
+                        response_time=30.0,
+                        timestamp=0,
+                        choice_selected=-1,
+                    )
+                )
+
+        if not topic_responses:
+            # Nếu topic chưa có câu trả lời nào, fallback dùng toàn bộ responses
+            return [
+                UserResponse(
+                    question_id=ans.question_id,
+                    is_correct=ans.is_correct,
+                    response_time=30.0,
+                    timestamp=0,
+                    choice_selected=-1,
+                )
+                for ans in session_progress.answers
+            ]
+
+        return topic_responses
+
+    def _get_preview_candidate_questions_and_topic(
         session_with_answer: DiagnosticSessionProgress,
         current_topic_id: Optional[str],
         all_candidate_questions: List[Question],
         current_question: Question,
         topic_question_counts: Optional[Dict[str, int]],
         question_topic_map: Dict[str, Dict[str, str]],
-    ) -> List[Question]:
+    ) -> Tuple[Optional[str], List[Question]]:
         """
         Lấy danh sách câu hỏi candidate cho preview next question.
         Nếu topic hiện tại vẫn còn câu hỏi thì chọn từ topic đó,
@@ -165,7 +239,7 @@ def _build_preview_response_for_session(
                 q for q in all_candidate_questions
                 if q.question_id != current_question.question_id
             ]
-            return remaining
+            return None, remaining
         
         next_topic_id = _get_current_active_topic(
             session=session_with_answer,
@@ -174,7 +248,7 @@ def _build_preview_response_for_session(
         )
         
         if next_topic_id is None:
-            return []
+            return None, []
         
         topic_questions = _filter_questions_by_topic(
             all_candidate_questions,
@@ -182,10 +256,30 @@ def _build_preview_response_for_session(
         )
         
         answered_ids = {ans.question_id for ans in session_with_answer.answers}
-        return [
+        remaining_questions = [
             q for q in topic_questions
             if q.question_id not in answered_ids
         ]
+        return next_topic_id, remaining_questions
+
+    # === Tính ability theo topic cho current_topic_id và chọn current_question ===
+    topic_specific_responses = _build_topic_responses(current_topic_id, session)
+    topic_ability, topic_confidence = estimator.estimate_ability(
+        topic_specific_responses,
+        difficulties,
+        all_responses_for_expected_time=all_responses,
+    )
+    topic_user_ability = UserAbility(
+        overall_ability=topic_ability,
+        confidence=topic_confidence,
+    )
+
+    current_question = selector.select_next_question(
+        candidate_questions=candidate_questions,
+        user_responses=user_responses,
+        question_difficulties=difficulties,
+        user_ability=topic_user_ability,
+    )
 
     answer_correct = UserResponse(
         question_id=current_question.question_id,
@@ -221,7 +315,7 @@ def _build_preview_response_for_session(
         ],
     )
 
-    preview_candidates_if_correct = _get_preview_candidate_questions(
+    next_topic_id_if_correct, preview_candidates_if_correct = _get_preview_candidate_questions_and_topic(
         session_if_correct,
         current_topic_id,
         all_candidate_questions,
@@ -229,7 +323,7 @@ def _build_preview_response_for_session(
         topic_question_counts,
         question_topic_map,
     )
-    preview_candidates_if_incorrect = _get_preview_candidate_questions(
+    next_topic_id_if_incorrect, preview_candidates_if_incorrect = _get_preview_candidate_questions_and_topic(
         session_if_incorrect,
         current_topic_id,
         all_candidate_questions,
@@ -239,19 +333,71 @@ def _build_preview_response_for_session(
     )
 
     if preview_candidates_if_correct:
+        # Độ khó hiện tại dùng làm mốc
+        current_difficulty = difficulties.get(
+            current_question.question_id, current_question.difficulty
+        )
+        # Nếu trả lời đúng: chỉ lấy câu có độ khó lớn hơn câu hiện tại
+        filtered_correct = _filter_candidates_by_difficulty(
+            preview_candidates_if_correct,
+            difficulties,
+            current_difficulty,
+            direction="up",
+        )
+        # Nếu lọc xong rỗng, fallback dùng danh sách gốc
+        effective_candidates_correct = filtered_correct or preview_candidates_if_correct
+
+        # Tính ability riêng cho topic tiếp theo (sau khi trả lời đúng)
+        topic_responses_correct = _build_topic_responses(
+            next_topic_id_if_correct, session_if_correct
+        )
+        topic_ability_correct, topic_confidence_correct = estimator.estimate_ability(
+            topic_responses_correct,
+            difficulties,
+            all_responses_for_expected_time=all_responses,
+        )
+        topic_user_ability_correct = UserAbility(
+            overall_ability=topic_ability_correct,
+            confidence=topic_confidence_correct,
+        )
+
         next_if_correct = selector.select_next_question(
-            candidate_questions=preview_candidates_if_correct,
+            candidate_questions=effective_candidates_correct,
             user_responses=user_responses + [answer_correct],
             question_difficulties=difficulties,
+            user_ability=topic_user_ability_correct,
         )
     else:
         next_if_correct = current_question
 
     if preview_candidates_if_incorrect:
+        # Tính ability riêng cho topic tiếp theo (sau khi trả lời sai)
+        topic_responses_incorrect = _build_topic_responses(
+            next_topic_id_if_incorrect, session_if_incorrect
+        )
+        topic_ability_incorrect, topic_confidence_incorrect = estimator.estimate_ability(
+            topic_responses_incorrect,
+            difficulties,
+            all_responses_for_expected_time=all_responses,
+        )
+        topic_user_ability_incorrect = UserAbility(
+            overall_ability=topic_ability_incorrect,
+            confidence=topic_confidence_incorrect,
+        )
+
         next_if_incorrect = selector.select_next_question(
-            candidate_questions=preview_candidates_if_incorrect,
+            candidate_questions=_filter_candidates_by_difficulty(
+                preview_candidates_if_incorrect,
+                difficulties,
+                difficulties.get(
+                    current_question.question_id, current_question.difficulty
+                ),
+                direction="down",
+            )
+            or preview_candidates_if_incorrect,
             user_responses=user_responses + [answer_incorrect],
             question_difficulties=difficulties,
+            user_ability=topic_user_ability_incorrect,
         )
     else:
         next_if_incorrect = current_question
@@ -289,12 +435,23 @@ def _build_preview_response_for_session(
         difficulty=incorrect_difficulty,
     )
 
+    estimator = get_ability_estimator()
+    all_responses = load_all_responses()
+    
+    overall_ability, confidence = estimator.estimate_ability(
+        user_responses,
+        difficulties,
+        all_responses_for_expected_time=all_responses
+    )
+    
     return DiagnosticPreviewResponse(
         current_question=current_preview,
         preview_next_question=DiagnosticPreviewBranches(
             if_correct=if_correct_preview,
             if_incorrect=if_incorrect_preview,
         ),
+        overall_ability=overall_ability,
+        confidence=confidence,
     )
 
 
@@ -389,15 +546,49 @@ async def get_next_preview_question(
     response_model=DiagnosticSubmitAnswerResponse,
     summary="Submit câu trả lời cho một câu trong bài Diagnostic",
 )
-async def submit_diagnostic_answer(request: DiagnosticSubmitAnswerRequest):
+async def submit_diagnostic_answer(
+    request: DiagnosticSubmitAnswerRequest,
+    estimator: AbilityEstimatorService = Depends(get_ability_estimator)
+):
     """
     API submit câu trả lời của người dùng.
-
+    Trả về overall ability sau khi đã tính toán với câu trả lời mới nhất.
     """
-    return DiagnosticSubmitAnswerResponse(
-        success=True,
-        message="Answer submitted successfully (no server-side session persisted).",
-    )
+    try:
+        _, question_difficulties = load_questions_and_difficulties()
+        
+        user_responses: List[UserResponse] = []
+        for ans in request.session.answers:
+            user_responses.append(
+                UserResponse(
+                    question_id=ans.question_id,
+                    is_correct=ans.is_correct,
+                    response_time=30.0,
+                    timestamp=0,
+                    choice_selected=-1,
+                )
+            )
+        
+        all_responses = load_all_responses()
+        
+        overall_ability, confidence = estimator.estimate_ability(
+            user_responses,
+            question_difficulties,
+            all_responses_for_expected_time=all_responses
+        )
+        
+        return DiagnosticSubmitAnswerResponse(
+            success=True,
+            message="Answer submitted successfully (no server-side session persisted).",
+            overall_ability=overall_ability,
+            confidence=confidence,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Lỗi khi submit answer: {str(e)}"
+        )
 
 
 @router.post(
