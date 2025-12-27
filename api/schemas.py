@@ -174,17 +174,10 @@ class DiagnosticInitRequest(BaseModel):
     Request cho API init Diagnostic.
 
     - user_id: định danh user
-    - coverage_topics: (optional) danh sách topic/subtopic mà bài Diagnostic cần cover.
     - topic_question_counts: (optional) số lượng câu hỏi cần cho từng topic_id.
     """
 
     user_id: str
-    coverage_topics: Optional[List[str]] = Field(
-        default=None,
-        description=(
-            "Danh sách topic cần bao phủ (nếu bỏ trống sẽ dùng toàn bộ topic có trong dữ liệu)"
-        ),
-    )
     topic_question_counts: Optional[Dict[str, int]] = Field(
         default=None,
         description="Số lượng câu hỏi cần cho từng topic_id. Nếu topic đã đủ số câu thì không gen thêm.",
@@ -194,7 +187,6 @@ class DiagnosticInitRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "user_id": "user_123",
-                "coverage_topics": ["5878262490202112", "5533861310103552"],
                 "topic_question_counts": {
                     "5878262490202112": 5,
                     "5533861310103552": 10
@@ -211,10 +203,6 @@ class DiagnosticNextQuestionRequest(BaseModel):
     """
 
     session: DiagnosticSessionProgress
-    coverage_topics: Optional[List[str]] = Field(
-        default=None,
-        description="Danh sách topic cần bao phủ (cùng format với init)",
-    )
     topic_question_counts: Optional[Dict[str, int]] = Field(
         default=None,
         description="Số lượng câu hỏi cần cho từng topic_id. Nếu topic đã đủ số câu thì không gen thêm.",
@@ -232,7 +220,6 @@ class DiagnosticNextQuestionRequest(BaseModel):
                         }
                     ],
                 },
-                "coverage_topics": ["5878262490202112"],
                 "topic_question_counts": {
                     "5878262490202112": 5,
                     "5533861310103552": 10

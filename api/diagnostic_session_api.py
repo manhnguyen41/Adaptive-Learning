@@ -35,21 +35,6 @@ from models.user_ability import UserAbility
 router = APIRouter(prefix="/api/diagnostic", tags=["Diagnostic Session"])
 
 
-def _filter_questions_by_topics(
-    all_questions: List[Question], coverage_topics: Optional[List[str]]
-) -> List[Question]:
-    """Lọc danh sách câu hỏi theo coverage_topics."""
-    if not coverage_topics:
-        return all_questions
-
-    coverage_set = set(str(t) for t in coverage_topics)
-    return [
-        q
-        for q in all_questions
-        if q.main_topic_id in coverage_set or q.sub_topic_id in coverage_set
-    ]
-
-
 def _get_current_active_topic(
     session: DiagnosticSessionProgress,
     topic_question_counts: Optional[Dict[str, int]],
@@ -123,7 +108,6 @@ def _build_preview_response_for_session(
     questions: List[Question],
     difficulties: Dict[str, float],
     session: DiagnosticSessionProgress,
-    coverage_topics: Optional[List[str]] = None,
     topic_question_counts: Optional[Dict[str, int]] = None,
 ) -> DiagnosticPreviewResponse:
     """
@@ -134,8 +118,7 @@ def _build_preview_response_for_session(
     question_topic_map = get_question_topic_map()
     estimator: AbilityEstimatorService = get_ability_estimator()
     all_responses = load_all_responses()
-
-    all_candidate_questions = _filter_questions_by_topics(questions, coverage_topics)
+    all_candidate_questions = questions
 
     current_topic_id = None
     if topic_question_counts:
@@ -177,7 +160,6 @@ def _build_preview_response_for_session(
         sẽ trả về toàn bộ responses (fallback dùng ability tổng).
         """
         if not target_topic_id:
-            # Không có topic cụ thể => dùng toàn bộ responses
             return [
                 UserResponse(
                     question_id=ans.question_id,
@@ -207,7 +189,6 @@ def _build_preview_response_for_session(
                 )
 
         if not topic_responses:
-            # Nếu topic chưa có câu trả lời nào, fallback dùng toàn bộ responses
             return [
                 UserResponse(
                     question_id=ans.question_id,
@@ -262,13 +243,13 @@ def _build_preview_response_for_session(
         ]
         return next_topic_id, remaining_questions
 
-    # === Tính ability theo topic cho current_topic_id và chọn current_question ===
     topic_specific_responses = _build_topic_responses(current_topic_id, session)
     topic_ability, topic_confidence = estimator.estimate_ability(
         topic_specific_responses,
         difficulties,
         all_responses_for_expected_time=all_responses,
     )
+
     topic_user_ability = UserAbility(
         overall_ability=topic_ability,
         confidence=topic_confidence,
@@ -331,23 +312,31 @@ def _build_preview_response_for_session(
         topic_question_counts,
         question_topic_map,
     )
-
+    
     if preview_candidates_if_correct:
-        # Độ khó hiện tại dùng làm mốc
-        current_difficulty = difficulties.get(
-            current_question.question_id, current_question.difficulty
+        is_new_topic_correct = (
+            topic_question_counts is not None
+            and next_topic_id_if_correct is not None
+            and current_topic_id is not None
+            and next_topic_id_if_correct != current_topic_id
         )
-        # Nếu trả lời đúng: chỉ lấy câu có độ khó lớn hơn câu hiện tại
-        filtered_correct = _filter_candidates_by_difficulty(
-            preview_candidates_if_correct,
-            difficulties,
-            current_difficulty,
-            direction="up",
-        )
-        # Nếu lọc xong rỗng, fallback dùng danh sách gốc
-        effective_candidates_correct = filtered_correct or preview_candidates_if_correct
+        
+        if is_new_topic_correct:
+            effective_candidates_correct = preview_candidates_if_correct
+        else:
+            current_difficulty = difficulties.get(
+                current_question.question_id, current_question.difficulty
+            )
+            
+            filtered_correct = _filter_candidates_by_difficulty(
+                preview_candidates_if_correct,
+                difficulties,
+                current_difficulty,
+                direction="up",
+            )
+            
+            effective_candidates_correct = filtered_correct or preview_candidates_if_correct
 
-        # Tính ability riêng cho topic tiếp theo (sau khi trả lời đúng)
         topic_responses_correct = _build_topic_responses(
             next_topic_id_if_correct, session_if_correct
         )
@@ -368,10 +357,32 @@ def _build_preview_response_for_session(
             user_ability=topic_user_ability_correct,
         )
     else:
-        next_if_correct = current_question
+        next_if_correct = None
 
     if preview_candidates_if_incorrect:
-        # Tính ability riêng cho topic tiếp theo (sau khi trả lời sai)
+        is_new_topic_incorrect = (
+            topic_question_counts is not None
+            and next_topic_id_if_incorrect is not None
+            and current_topic_id is not None
+            and next_topic_id_if_incorrect != current_topic_id
+        )
+        
+        if is_new_topic_incorrect:
+            effective_candidates_incorrect = preview_candidates_if_incorrect
+        else:
+            current_difficulty = difficulties.get(
+                current_question.question_id, current_question.difficulty
+            )
+            
+            filtered_incorrect = _filter_candidates_by_difficulty(
+                preview_candidates_if_incorrect,
+                difficulties,
+                current_difficulty,
+                direction="down",
+            )
+            
+            effective_candidates_incorrect = filtered_incorrect or preview_candidates_if_incorrect
+        
         topic_responses_incorrect = _build_topic_responses(
             next_topic_id_if_incorrect, session_if_incorrect
         )
@@ -386,23 +397,17 @@ def _build_preview_response_for_session(
         )
 
         next_if_incorrect = selector.select_next_question(
-            candidate_questions=_filter_candidates_by_difficulty(
-                preview_candidates_if_incorrect,
-                difficulties,
-                difficulties.get(
-                    current_question.question_id, current_question.difficulty
-                ),
-                direction="down",
-            )
-            or preview_candidates_if_incorrect,
+            candidate_questions=effective_candidates_incorrect,
             user_responses=user_responses + [answer_incorrect],
             question_difficulties=difficulties,
             user_ability=topic_user_ability_incorrect,
         )
     else:
-        next_if_incorrect = current_question
+        next_if_incorrect = None
 
     def _resolve_topic_info(q: Question) -> Dict[str, str]:
+        if q is None:
+            return {"topic_id": None, "topic_name": None}
         topic_id = str(q.main_topic_id or q.sub_topic_id)
         topic_info = topic_meta_map.get(topic_id, {})
         topic_name = topic_info.get("name")
@@ -413,8 +418,14 @@ def _build_preview_response_for_session(
     incorrect_topic_info = _resolve_topic_info(next_if_incorrect)
 
     current_difficulty = difficulties.get(current_question.question_id, 0.0)
-    correct_difficulty = difficulties.get(next_if_correct.question_id, 0.0)
-    incorrect_difficulty = difficulties.get(next_if_incorrect.question_id, 0.0)
+    if next_if_correct:
+        correct_difficulty = difficulties.get(next_if_correct.question_id, 0.0)
+    else:
+        correct_difficulty = 0.0
+    if next_if_incorrect:
+        incorrect_difficulty = difficulties.get(next_if_incorrect.question_id, 0.0)
+    else:
+        incorrect_difficulty = 0.0
 
     current_preview = DiagnosticPreviewQuestion(
         question_id=current_question.question_id,
@@ -423,15 +434,15 @@ def _build_preview_response_for_session(
         difficulty=current_difficulty,
     )
     if_correct_preview = DiagnosticPreviewQuestion(
-        question_id=next_if_correct.question_id,
-        topic_id=correct_topic_info["topic_id"],
-        topic_name=correct_topic_info["topic_name"],
-        difficulty=correct_difficulty,
+        question_id=next_if_correct.question_id if next_if_correct else "None",
+        topic_id=correct_topic_info["topic_id"] if correct_topic_info["topic_id"] else "None",
+        topic_name=correct_topic_info["topic_name"] if correct_topic_info["topic_name"] else "None",
+        difficulty=correct_difficulty, 
     )
     if_incorrect_preview = DiagnosticPreviewQuestion(
-        question_id=next_if_incorrect.question_id,
-        topic_id=incorrect_topic_info["topic_id"],
-        topic_name=incorrect_topic_info["topic_name"],
+        question_id=next_if_incorrect.question_id if next_if_incorrect else "None",
+        topic_id=incorrect_topic_info["topic_id"] if incorrect_topic_info["topic_id"] else "None",
+        topic_name=incorrect_topic_info["topic_name"] if incorrect_topic_info["topic_name"] else "None",
         difficulty=incorrect_difficulty,
     )
 
@@ -483,7 +494,6 @@ async def init_diagnostic_session(
             questions=questions,
             difficulties=difficulties,
             session=empty_session,
-            coverage_topics=request.coverage_topics,
             topic_question_counts=request.topic_question_counts,
         )
     except FileNotFoundError as e:
@@ -527,7 +537,6 @@ async def get_next_preview_question(
             questions=questions,
             difficulties=difficulties,
             session=request.session,
-            coverage_topics=request.coverage_topics,
             topic_question_counts=request.topic_question_counts,
         )
     except FileNotFoundError as e:
