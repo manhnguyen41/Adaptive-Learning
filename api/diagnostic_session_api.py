@@ -336,7 +336,7 @@ def _build_preview_response_for_session(
             )
             
             effective_candidates_correct = filtered_correct or preview_candidates_if_correct
-
+            
         topic_responses_correct = _build_topic_responses(
             next_topic_id_if_correct, session_if_correct
         )
@@ -382,7 +382,7 @@ def _build_preview_response_for_session(
             )
             
             effective_candidates_incorrect = filtered_incorrect or preview_candidates_if_incorrect
-        
+            
         topic_responses_incorrect = _build_topic_responses(
             next_topic_id_if_incorrect, session_if_incorrect
         )

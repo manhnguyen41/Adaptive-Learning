@@ -21,8 +21,8 @@ class DifficultyEstimatorService:
     @staticmethod
     def estimate_difficulty(responses: List[UserResponse], 
                            avg_time_all_questions: float = None,
-                           accuracy_weight: float = 0.8,
-                           time_weight: float = 0.2) -> float:
+                           accuracy_weight: float = 0.5,
+                           time_weight: float = 0.5) -> float:
         """
         Tính độ khó câu hỏi dựa trên cả tỷ lệ trả lời đúng và thời gian trả lời trung bình
         
@@ -49,21 +49,17 @@ class DifficultyEstimatorService:
             avg_time_all_questions = avg_time
         
         min_time = 5.0
-        max_time = 300.0
+        max_time = 70.0
         
-        if avg_time_all_questions > 0:
-            time_ratio = avg_time / avg_time_all_questions
-            difficulty_from_time = 0.5 * (1 + (time_ratio - 1) * 0.5)
-        else:
-            normalized_time = (avg_time - min_time) / (max_time - min_time)
-            normalized_time = max(0.0, min(1.0, normalized_time))
-            difficulty_from_time = normalized_time
+        normalized_time = (avg_time - min_time) / (max_time - min_time)
+        normalized_time = max(0.0, min(1.0, normalized_time))
+        difficulty_from_time = normalized_time
         
         final_difficulty_0_1 = (accuracy_weight * difficulty_from_accuracy + 
                                time_weight * difficulty_from_time)
         final_difficulty_0_1 = max(0.0, min(1.0, final_difficulty_0_1))
         
-        final_difficulty_std = DifficultyScaleConverter.to_standard_normal(final_difficulty_0_1)
+        final_difficulty_std = DifficultyScaleConverter.to_standard_normal(final_difficulty_0_1) + 1.2
         
         return final_difficulty_std
 
